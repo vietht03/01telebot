@@ -1,0 +1,7 @@
+# Chỉ gồm thư viện thuần Python (cài được trên Termux, không cần biên dịch)
+python-telegram-bot[job-queue]
+python-dotenv
+httpx
+pypdf
+telethon
+tzdata

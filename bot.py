@@ -19,6 +19,8 @@ TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
 GROUP_ID = int(os.getenv("GROUP_ID", 0) or 0)
 KT_TIME = os.getenv("KT_CHECK_TIME", "23:30")
 KT_DAYS = tuple(int(d) for d in os.getenv("KT_DAYS", "0,1,2,3,4,5,6").split(","))
+CN_GD_TIME = os.getenv("CN_GIAODUC_TIME", "09:30")
+CN_DL_TIME = os.getenv("CN_DANGLE_TIME", "11:05")
 THU5_TIME = os.getenv("THU5_TIME", "08:00")
 THU4_TIME = os.getenv("THU4_TIME", "11:00")
 MANA_TIME = os.getenv("MANA_CHECK_TIME", "17:31")
@@ -572,6 +574,23 @@ async def thu4_job(ctx: ContextTypes.DEFAULT_TYPE):
         relay(render_thu4())
 
 
+def make_form_job(path: str, weekday: int):
+    """Tạo job: đúng thứ `weekday` thì gửi form (đã điền ngày) cho admin và chuyển tiếp qua tài khoản của admin."""
+    async def job(ctx: ContextTypes.DEFAULT_TYPE):
+        if dt.datetime.now(TZ).weekday() == weekday:
+            text = render_msg(path)
+            await send_admin(ctx.bot, text)
+            relay(text)
+    return job
+
+
+def make_form_cmd(path: str):
+    @admin_only
+    async def cmd(update: Update, ctx):
+        await update.message.reply_text(render_msg(path))
+    return cmd
+
+
 async def thu5_job(ctx: ContextTypes.DEFAULT_TYPE):
     if dt.datetime.now(TZ).weekday() == 3:  # thứ 5
         await send_admin(ctx.bot, render_thu5())
@@ -685,7 +704,7 @@ async def setup_profile(app):
 def main():
     app = Application.builder().token(TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30).concurrent_updates(True).post_init(setup_profile).build()
     for name, fn in [("myid", myid), ("start", start), ("lop", lop), ("danhsach", danhsach),
-                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("thu5", thu5), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
+                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("thu5", thu5), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
         app.add_handler(CommandHandler(name, fn))
     P = filters.ChatType.PRIVATE
     app.add_handler(ChatMemberHandler(on_added, ChatMemberHandler.MY_CHAT_MEMBER))
@@ -700,6 +719,9 @@ def main():
     app.job_queue.run_daily(mana_job, dt.time(h, m, tzinfo=TZ))
     pre = dt.datetime.combine(dt.date.today(), dt.time(h, m)) - dt.timedelta(minutes=6)
     app.job_queue.run_daily(mana_prenotice, dt.time(pre.hour, pre.minute, tzinfo=TZ))
+    for path, hhmm in (("msg_cn_giaoduc.txt", CN_GD_TIME), ("msg_cn_dangle.txt", CN_DL_TIME)):
+        fh, fm = map(int, hhmm.split(":"))
+        app.job_queue.run_daily(make_form_job(path, 6), dt.time(fh, fm, tzinfo=TZ), name=path)  # 6 = Chủ nhật
     t5h, t5m = map(int, THU5_TIME.split(":"))
     app.job_queue.run_daily(thu5_job, dt.time(t5h, t5m, tzinfo=TZ))
     th, tm = map(int, THU4_TIME.split(":"))

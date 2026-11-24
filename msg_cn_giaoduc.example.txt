@@ -1,0 +1,23 @@
+🌈 ĐIỂM DANH GIÁO DỤC TRƯỚC LỄ CHỦ NHẬT
+[{YYMMDD}]       
+🌱 Khu vực: Đà Nẵng    
+⏰ Deadline: 10:00 - {YY.MM.DD}
+
+✅ Cú pháp: Họ tên/OFF(ON-Lý do)/Khung giờ  
+Ví dụ: Nguyễn Văn A/OFF/⭕️/10:00
+
+DN-BNM-T1 : 11/00/00/00/00
+
+1. 000001-AAAA/
+2. 000002-AAAA/
+3. 000003-AAAA/
+4. 000004-AAAA/
+5. 000005-AAAA/
+6. 000006-AAAA/
+7. 000007-AAAA/
+8. 000008-AAAA/
+9. 000009-AAAA/
+10. 000010-AAAA/
+11. 000011-AAAA/
+
+- Hết -

@@ -14,6 +14,8 @@ template.txt
 # Nội dung form có danh sách mã thành viên (dùng bản .example)
 msg_thu4.txt
 msg_thu5.txt
+msg_cn_giaoduc.txt
+msg_cn_dangle.txt
 
 # Khác
 .venv/

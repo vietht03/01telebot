@@ -5,7 +5,6 @@ import datetime as dt
 from pathlib import Path
 
 import os
-import anthropic
 from pypdf import PdfReader
 
 MODEL = "claude-opus-5-5"
@@ -90,40 +89,50 @@ GEMINI_FALLBACKS = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.7-fla
 
 
 async def _ask_gemini(user: str) -> str:
-    from google import genai
-    from google.genai import types, errors
-    gc = genai.Client(api_key=os.environ["GEMINI_API_KEY"], http_options=types.HttpOptions(
-        timeout=20000, retry_options=types.HttpRetryOptions(attempts=1)))
-    cfg = types.GenerateContentConfig(system_instruction=SYSTEM, max_output_tokens=2000)
+    """Gọi Gemini bằng HTTP thuần (httpx) để không cần cài SDK nặng, chạy được cả trên điện thoại."""
+    import httpx
+    key = os.environ["GEMINI_API_KEY"]
+    body = {"systemInstruction": {"parts": [{"text": SYSTEM}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {"maxOutputTokens": 4096}}
     last = None
-    for m in list(dict.fromkeys([GEMINI_MODEL] + GEMINI_FALLBACKS)) * 2:  # 2 vòng
-        try:
-            r = await gc.aio.models.generate_content(model=m, contents=user, config=cfg)
-            if r.text:
-                return r.text
-        except errors.ServerError as e:  # 5xx: quá tải -> thử model khác
-            last = e
-        except errors.ClientError as e:
-            if e.code in (404, 429):  # model không còn / hết hạn mức -> thử model khác
+    async with httpx.AsyncClient(timeout=25) as h:
+        for m in list(dict.fromkeys([GEMINI_MODEL] + GEMINI_FALLBACKS)) * 2:  # 2 vòng qua danh sách model
+            try:
+                r = await h.post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+                                 headers={"x-goog-api-key": key}, json=body)
+            except httpx.HTTPError as e:  # hết thời gian chờ, lỗi mạng
                 last = e
+                continue
+            if r.status_code == 200:
+                cands = r.json().get("candidates") or []
+                parts = (cands[0].get("content") or {}).get("parts", []) if cands else []
+                text = "".join(p.get("text", "") for p in parts)
+                if text:
+                    return text
+                last = RuntimeError(f"{m}: không có nội dung trả về")
+            elif r.status_code in (404, 429) or r.status_code >= 500:  # model gỡ / hết hạn mức / quá tải -> thử model khác
+                last = RuntimeError(f"{m}: HTTP {r.status_code}")
             else:
-                raise
-        except Exception as e:  # hết thời gian chờ, lỗi mạng
-            last = e
+                raise RuntimeError(f"Gemini lỗi {r.status_code}: {r.text[:200]}")
     raise RuntimeError("Gemini đang quá tải, bạn thử lại sau ít phút.") from last
 
 
 async def _ask_claude(user: str) -> str:
-    client = anthropic.AsyncAnthropic()  # đọc ANTHROPIC_API_KEY
-    resp = await client.beta.messages.create(
-        model=MODEL, max_tokens=2000, system=SYSTEM,
-        betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-        output_config={"effort": "low"},
-        messages=[{"role": "user", "content": user}],
-    )
-    if resp.stop_reason == "refusal":
+    """Gọi Claude bằng HTTP thuần (chưa kiểm thử vì chưa có ANTHROPIC_API_KEY)."""
+    import httpx
+    async with httpx.AsyncClient(timeout=90) as h:
+        r = await h.post("https://api.anthropic.com/v1/messages",
+                         headers={"x-api-key": os.environ["ANTHROPIC_API_KEY"],
+                                  "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                         json={"model": MODEL, "max_tokens": 2000, "system": SYSTEM,
+                               "messages": [{"role": "user", "content": user}]})
+    if r.status_code != 200:
+        raise RuntimeError(f"Claude lỗi {r.status_code}: {r.text[:200]}")
+    d = r.json()
+    if d.get("stop_reason") == "refusal":
         return "Xin lỗi, tôi không thể trả lời câu hỏi này."
-    return "".join(b.text for b in resp.content if b.type == "text") or "(không có câu trả lời)"
+    return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text") or "(không có câu trả lời)"
 
 
 async def answer(question: str) -> str:

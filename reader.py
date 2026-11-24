@@ -16,6 +16,19 @@ log = logging.getLogger("reader")
 AUTO_TEXT = os.getenv("AUTOREPLY_TEXT", "Xin chào, tôi đang bận.")
 AUTO_DELAY = float(os.getenv("AUTOREPLY_DELAY_MIN", "10")) * 60      # chờ bao lâu rồi mới trả lời
 AUTO_COOLDOWN = float(os.getenv("AUTOREPLY_COOLDOWN_H", "6")) * 3600  # mỗi người tối đa 1 lần / khoảng này
+def _hm(v: str) -> dt.time:
+    h, m = v.split(":")
+    return dt.time(int(h), int(m))
+
+
+AUTO_START = _hm(os.getenv("AUTOREPLY_START", "08:00"))   # chỉ tự trả lời trong khung giờ này
+AUTO_END = _hm(os.getenv("AUTOREPLY_END", "18:00"))
+
+
+def in_hours(when: dt.datetime) -> bool:
+    return AUTO_START <= when.astimezone(bot.TZ).time() < AUTO_END
+
+
 AUTO_BOTS = os.getenv("AUTOREPLY_ALLOW_BOTS", "0") == "1"             # chỉ dùng để thử
 bot.db.execute("CREATE TABLE IF NOT EXISTS autoreply(user_id INTEGER PRIMARY KEY, last_sent REAL)")
 pending = set()
@@ -68,7 +81,7 @@ def autoreply_on() -> bool:
 async def delayed_reply(chat_id, user_id, msg_date):
     try:
         await asyncio.sleep(AUTO_DELAY)
-        if not autoreply_on():
+        if not autoreply_on() or not in_hours(dt.datetime.now(bot.TZ)):
             return
         row = bot.db.execute("SELECT last_sent FROM autoreply WHERE user_id=?", (user_id,)).fetchone()
         if row and time.time() - row[0] < AUTO_COOLDOWN:
@@ -138,8 +151,8 @@ async def main():
 
     @client.on(events.NewMessage(incoming=True))
     async def _auto(event):
-        if not event.is_private or not autoreply_on():
-            return
+        if not event.is_private or not autoreply_on() or not in_hours(event.message.date):
+            return  # ngoài khung giờ làm việc thì không tự trả lời
         sender = await event.get_sender()
         if sender is None or getattr(sender, "is_self", False) or getattr(sender, "deleted", False):
             return
