@@ -1,0 +1,8 @@
+python-telegram-bot[job-queue]
+python-dotenv
+anthropic
+google-genai
+pypdf
+telethon
+qrcode[pil]
+pillow

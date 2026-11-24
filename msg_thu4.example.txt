@@ -1,0 +1,31 @@
+🌈 ĐIỂM DANH DÂNG LỄ THỨ 4
+[{YYMMDD}]       
+🌱 Khu vực: Đà Nẵng    
+⏰ Deadline: 19:10 - {YY.MM.DD}
+✅ Cú pháp: 
+
+Online:
+1. Tắt Cam: ID Chakki/ON-Tắt cam, lí do tắt cam/⭕️/Thời gian 
+Ví dụ: 000123-NTHA/ON-Tắt cam, Bảo an/⭕️/11:40
+2. Mở cam: ID Chakki/ON-Mở cam, lí do online/⭕️/Thời gian
+Ví dụ: 000123-NTHA/ON-Mở cam, Ở quê/⭕️/11:40
+Offline: 
+1. ID Chakki/OFF/⭕️/Thời gian
+Ví dụ: 000123-NTHA/OFF/⭕️/19:10
+
+
+DN-BNM-T1 : 11/00/00/00/00
+
+1. 000001-AAAA/
+2. 000002-AAAA/
+3. 000003-AAAA/
+4. 000004-AAAA/
+5. 000005-AAAA/
+6. 000006-AAAA/
+7. 000007-AAAA/
+8. 000008-AAAA/
+9. 000009-AAAA/
+10. 000010-AAAA/
+11. 000011-AAAA/
+
+- Hết -

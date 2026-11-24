@@ -1,0 +1,21 @@
+# Bí mật và phiên đăng nhập — TUYỆT ĐỐI không commit
+.env
+tg_reader.session*
+*.session
+*.session-journal
+
+# Dữ liệu và log trên máy
+attendance.db
+docs/
+*.log
+qr_login.png
+template.txt
+
+# Nội dung form có danh sách mã thành viên (dùng bản .example)
+msg_thu4.txt
+msg_thu5.txt
+
+# Khác
+.venv/
+__pycache__/
+*.bak
