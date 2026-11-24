@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")/.."
 pkg update -y
-pkg install -y python tmux openssh tzdata
+pkg install -y python tmux openssh
 pip install -r requirements-termux.txt
 mkdir -p ~/.termux/boot
 cp termux/boot.sh ~/.termux/boot/start-bot.sh
