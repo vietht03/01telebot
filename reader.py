@@ -103,12 +103,15 @@ async def delayed_reply(chat_id, user_id, msg_date):
 GD = ("diem danh giao duc truoc le chu nhat", "Giáo dục trước lễ CN")
 DL_CN = ("diem danh dang le chu nhat", "Dâng lễ Chủ nhật")
 LN = ("diem danh tham gia le nhom", "Tham gia lễ nhóm")
+ST = ("diem danh giao duc sach sang tao troi dat", "Giáo dục sách Sáng tạo Trời Đất")
 REVIEWS = [  # id, thứ (0=T2), giờ rà soát, các bảng, có báo cả người ❌ không
+    # tối thứ 3 21:50: bảng kết quả + tin nhắc @username, gửi bạn rồi chuyển chị
+    dict(id="t3", wd=1, at=_hm(os.getenv("THU3_REVIEW_TIME", "21:50")), tables=[ST], absent=False, frame=True, list=False),
     dict(id="t4", wd=2, at=_hm(os.getenv("THU4_REVIEW_TIME", "21:50")), tables=[("diem danh dang le thu 4", "Dâng lễ thứ 4")], absent=True),
     dict(id="cn_gd", wd=6, at=_hm(os.getenv("CN_GD_REVIEW_TIME", "10:00")), tables=[GD], absent=False),
-    # tối thứ 7: 21:00 gửi bảng kết quả + ai chưa điểm danh; 21:58 tin nhắc có @username
+    # tối thứ 7: 20:58 tin nhắc có @username, 21:00 bảng kết quả + ai chưa điểm danh
     dict(id="t7", wd=5, at=_hm(os.getenv("THU7_REVIEW_TIME", "21:00")), tables=[LN], absent=True, frame=True, mention=False),
-    dict(id="t7_nhac", wd=5, at=_hm(os.getenv("THU7_NHAC_TIME", "21:58")), tables=[LN], nhac=True),
+    dict(id="t7_nhac", wd=5, at=_hm(os.getenv("THU7_NHAC_TIME", "20:58")), tables=[LN], nhac=True),
     dict(id="cn", wd=6, at=_hm(os.getenv("CN_REVIEW_TIME", "19:10")), tables=[GD, DL_CN], absent=True),
 ]
 REVIEW_GRACE = 30 * 60  # reader khởi động trễ quá 30 phút sau giờ hẹn thì bỏ, không báo muộn
@@ -177,6 +180,7 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
             break
         msgs.append(m)
     outs, notices, mentions = [], [], []
+    relay_out = relay_out and rv.get("relay", True)
     for title, label in rv["tables"]:
         rows = table_status(msgs, title)
         if rows is not None and rv.get("nhac"):  # 21:58: chỉ nhắc những người vẫn chưa điểm danh
@@ -197,6 +201,11 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
         if rows is None:
             notices.append(f"📋 {label} {now:%d/%m}: tôi chưa thấy bảng điểm danh này trong nhóm.")
             continue
+        if not rv.get("list", True):  # chỉ gửi bảng + tin nhắc @username, không gửi danh sách chưa điểm danh
+            mention = bot.mention_msg([c for c, st, _ in rows if st == "missing"], f"điểm danh {label}")
+            if mention:
+                mentions.append(mention)
+            continue
         text, alert = review_text(rows, label, now.date(), at, rv["absent"])
         if alert:
             outs.append(text)
@@ -207,10 +216,11 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
             notices.append(text)
     for t in notices:
         await notify_admin(t)
-    if outs:
+    if outs or mentions:
         full = "\n\n".join(outs)
-        await notify_admin(full)
-        if relay_out:
+        if full:
+            await notify_admin(full)
+        if full and relay_out:
             bot.relay(full)  # reader sẽ gửi cho chị từ tài khoản của bạn (tắt bằng /chuyen off)
         for mention in mentions:  # tin nhắc người còn thiếu: gửi bạn, rồi chuyển chị khi là lượt tự động
             await notify_admin(mention)
@@ -250,7 +260,7 @@ async def review_loop(group):
                 if today:  # rà soát tay: dùng lượt đầy đủ nhất (cuối ngày), chỉ báo riêng bạn
                     await run_review(group, max(today, key=lambda r: r["at"]), f"{now:%H:%M}", relay_out=False)
                 else:
-                    await notify_admin("Hôm nay không phải thứ 4, thứ 7 hay Chủ nhật nên không có bảng cần rà soát.")
+                    await notify_admin("Hôm nay không phải thứ 3, 4, 7 hay Chủ nhật nên không có bảng cần rà soát.")
                 continue
             for rv in REVIEWS:
                 if rv["wd"] != now.weekday():

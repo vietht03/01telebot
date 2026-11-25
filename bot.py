@@ -24,6 +24,7 @@ CN_DL_TIME = os.getenv("CN_DANGLE_TIME", "11:00")
 THU5_TIME = os.getenv("THU5_TIME", "08:00")
 THU4_TIME = os.getenv("THU4_TIME", "11:00")
 THU7_TIME = os.getenv("THU7_TIME", "20:30")
+THU3_TIME = os.getenv("THU3_TIME", "08:00")
 MANA_TIME = os.getenv("MANA_CHECK_TIME", "17:30")
 MANA_DAYS = tuple(int(d) for d in os.getenv("MANA_DAYS", "0,1,2,3,4,5,6").split(","))
 TEMPLATE_FILE = "template.txt"
@@ -762,6 +763,7 @@ async def setup_profile(app):
         BotCommand("test", "Nhắc điểm danh thử"),
         BotCommand("thanhvien", "Liệt kê thành viên nhóm"),
         BotCommand("rasoat", "Rà soát ngay bảng điểm danh hôm nay"),
+        BotCommand("thu3", "Form điểm danh sách Sáng tạo Trời Đất thứ 3"),
         BotCommand("thu7", "Form điểm danh lễ nhóm tối thứ 7"),
         BotCommand("kt", "Khung + báo cáo Cảm nhận KT"),
         BotCommand("chuyen", "Bật/tắt tự gửi báo cáo cho chị"),
@@ -780,7 +782,7 @@ async def setup_profile(app):
 def main():
     app = Application.builder().token(TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30).concurrent_updates(True).post_init(setup_profile).build()
     for name, fn in [("myid", myid), ("start", start), ("lop", lop), ("danhsach", danhsach),
-                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("rasoat", rasoat), ("thanhvien", thanhvien), ("thu5", thu5), ("thu7", make_form_cmd("msg_thu7.txt")), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
+                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("rasoat", rasoat), ("thanhvien", thanhvien), ("thu5", thu5), ("thu7", make_form_cmd("msg_thu7.txt")), ("thu3", make_form_cmd("msg_thu3.txt")), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
         app.add_handler(CommandHandler(name, fn))
     P = filters.ChatType.PRIVATE
     app.add_handler(ChatMemberHandler(on_added, ChatMemberHandler.MY_CHAT_MEMBER))
@@ -798,6 +800,8 @@ def main():
     for path, hhmm in (("msg_cn_giaoduc.txt", CN_GD_TIME), ("msg_cn_dangle.txt", CN_DL_TIME)):
         fh, fm = map(int, hhmm.split(":"))
         app.job_queue.run_daily(make_form_job(path, 6), dt.time(fh, fm, tzinfo=TZ), name=path)  # 6 = Chủ nhật
+    t3h, t3m = map(int, THU3_TIME.split(":"))
+    app.job_queue.run_daily(make_form_job("msg_thu3.txt", 1), dt.time(t3h, t3m, tzinfo=TZ), name="msg_thu3.txt")  # 1 = thứ 3
     t7h, t7m = map(int, THU7_TIME.split(":"))
     app.job_queue.run_daily(make_form_job("msg_thu7.txt", 5), dt.time(t7h, t7m, tzinfo=TZ), name="msg_thu7.txt")  # 5 = thứ 7
     t5h, t5m = map(int, THU5_TIME.split(":"))
