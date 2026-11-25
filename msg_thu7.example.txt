@@ -1,0 +1,24 @@
+🌿 ĐIỂM DANH THAM GIA LỄ NHÓM
+[{YYMMDD}]       
+🌱 Khu vực: Đà Nẵng    
+⏰ Deadline: 21:30
+
+✅ Cú pháp: Họ Tên/OFF (ON-Lí do)/Tham gia (⭕️)/Vắng (❌-lí do)/Thời gian (Điểm danh)   
+Ví dụ: Nguyễn Văn A/OFF/⭕️/20:00
+
+
+DN-BNM-T1 : 11/00/00/00/00
+
+1. 000001-AAAA/
+2. 000002-AAAA/
+3. 000003-AAAA/
+4. 000004-AAAA/
+5. 000005-AAAA/
+6. 000006-AAAA/
+7. 000007-AAAA/
+8. 000008-AAAA/
+9. 000009-AAAA/
+10. 0000010-AAAA/
+11. 0000011-AAAA/  
+
+- Hết -
