@@ -21,3 +21,4 @@ msg_cn_dangle.txt
 .venv/
 __pycache__/
 *.bak
+usernames.txt

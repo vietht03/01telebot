@@ -1,0 +1,3 @@
+# mỗi dòng: mã = @username
+000001-AAAA = @username1
+000002-AAAA = @username2

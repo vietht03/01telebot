@@ -369,6 +369,34 @@ def mana_frame(day: dt.date) -> str:
     return "\n".join(lines)
 
 
+USERNAMES_FILE = "usernames.txt"  # mỗi dòng: 000269-TTXĐ = @abc  (file có mã thành viên nên không commit)
+
+
+def load_usernames() -> dict:
+    out = {}
+    if os.path.exists(USERNAMES_FILE):
+        for line in open(USERNAMES_FILE, encoding="utf-8"):
+            if "=" in line:
+                code, user = (x.strip() for x in line.split("=", 1))
+                if code and user:
+                    out[code.split("-")[0].strip()] = user if user.startswith("@") else "@" + user
+    return out
+
+
+def mention_msg(codes, phrase: str) -> str:
+    """Tin để bạn gửi vào nhóm nhắc người còn thiếu: '@a @b anh chị {phrase} giúp em nha ạ'. Người chưa có @username bị bỏ qua."""
+    names = load_usernames()
+    users = [names[c.split("-")[0].strip()] for c in codes if c.split("-")[0].strip() in names]
+    return " ".join(users) + f" anh chị {phrase} giúp em nha ạ" if users else ""
+
+
+async def send_mention(bot_, codes, phrase: str):
+    msg = mention_msg(codes, phrase)
+    if msg:
+        await send_admin(bot_, msg)
+        relay(msg)  # chuyển cho chị từ tài khoản của bạn (tắt bằng /chuyen off)
+
+
 async def mana_job(ctx: ContextTypes.DEFAULT_TYPE):
     now = dt.datetime.now(TZ)
     if now.weekday() not in MANA_DAYS:
@@ -393,6 +421,7 @@ async def mana_prenotice(ctx: ContextTypes.DEFAULT_TYPE):
         line = mana_line(now.date())
         await send_admin(ctx.bot, line)
         relay(line)
+        await send_mention(ctx.bot, [c for c, st, _ in mana_rows(now.date()) if st == "missing"], "cảm nhận Mana")
 
 
 # ---------- báo cáo tuần (mỗi người 7 ô T2..CN) ----------
@@ -572,8 +601,10 @@ async def kt_prenotice(ctx: ContextTypes.DEFAULT_TYPE):
     if not kt_rows(start):  # chưa có bài trong nhóm: chỉ nhắc riêng bạn
         return await send_admin(ctx.bot, f"🔔 Sắp {KT_TIME[:5]} mà tôi chưa thấy bài Cảm nhận KT tuần này trong nhóm. "
                       "Nếu có, bạn copy bài dán vào đây giúp.")
-    if kt_missing(start):  # có người chưa cảm nhận: báo riêng bạn để bạn nhắc họ
+    if kt_missing(start):  # có người chưa cảm nhận: báo bạn, chuyển chị, rồi soạn sẵn tin nhắc cho bạn
         await send_admin(ctx.bot, kt_summary(start))
+        relay(kt_summary(start))
+        await send_mention(ctx.bot, kt_missing(start), "cảm nhận KT")
 
 
 # ---------- tin nhắn cố định gửi cho bạn lúc 11:00 thứ 4 (nội dung nằm trong msg_thu4.txt, gửi y nguyên) ----------
@@ -633,6 +664,14 @@ async def rasoat(update: Update, ctx):
     db.execute("INSERT OR REPLACE INTO seen VALUES('review_req','1')")
     db.commit()
     await update.message.reply_text("Đang rà soát bảng điểm danh hôm nay trong nhóm, tôi sẽ báo kết quả ngay (chỉ gửi riêng bạn).")
+
+
+@admin_only
+async def thanhvien(update: Update, ctx):
+    """Yêu cầu reader liệt kê thành viên nhóm (chỉ gửi riêng bạn)."""
+    db.execute("INSERT OR REPLACE INTO seen VALUES('members_req','1')")
+    db.commit()
+    await update.message.reply_text("Đang lấy danh sách thành viên nhóm, tôi sẽ gửi ngay (chỉ riêng bạn).")
 
 
 @admin_only
@@ -720,6 +759,7 @@ async def setup_profile(app):
         BotCommand("danhsach", "Xem danh sách lớp"),
         BotCommand("mau", "Đặt mẫu tin điểm danh"),
         BotCommand("test", "Nhắc điểm danh thử"),
+        BotCommand("thanhvien", "Liệt kê thành viên nhóm"),
         BotCommand("rasoat", "Rà soát ngay bảng điểm danh hôm nay"),
         BotCommand("kt", "Khung + báo cáo Cảm nhận KT"),
         BotCommand("chuyen", "Bật/tắt tự gửi báo cáo cho chị"),
@@ -738,7 +778,7 @@ async def setup_profile(app):
 def main():
     app = Application.builder().token(TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30).concurrent_updates(True).post_init(setup_profile).build()
     for name, fn in [("myid", myid), ("start", start), ("lop", lop), ("danhsach", danhsach),
-                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("rasoat", rasoat), ("thu5", thu5), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
+                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("rasoat", rasoat), ("thanhvien", thanhvien), ("thu5", thu5), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
         app.add_handler(CommandHandler(name, fn))
     P = filters.ChatType.PRIVATE
     app.add_handler(ChatMemberHandler(on_added, ChatMemberHandler.MY_CHAT_MEMBER))

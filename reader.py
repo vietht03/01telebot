@@ -163,7 +163,7 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
         if m.date < start:
             break
         msgs.append(m)
-    outs, notices = [], []
+    outs, notices, mentions = [], [], []
     for title, label in rv["tables"]:
         rows = table_status(msgs, title)
         if rows is None:
@@ -172,6 +172,9 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
         text, alert = review_text(rows, label, now.date(), at, rv["absent"])
         if alert:
             outs.append(text)
+            mention = bot.mention_msg([c for c, st, _ in rows if st == "missing"], f"điểm danh {label}")
+            if mention:
+                mentions.append(mention)
         else:
             notices.append(text)
     for t in notices:
@@ -181,6 +184,22 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
         await notify_admin(full)
         if relay_out:
             bot.relay(full)  # reader sẽ gửi cho chị từ tài khoản của bạn (tắt bằng /chuyen off)
+        for mention in mentions:  # tin nhắc người còn thiếu: gửi bạn, rồi chuyển chị khi là lượt tự động
+            await notify_admin(mention)
+            if relay_out:
+                bot.relay(mention)
+
+
+async def list_members(group) -> str:
+    """Danh sách thành viên nhóm dạng '1. @username' (người không có username thì ghi tên)."""
+    lines = []
+    async for u in client.iter_participants(group):
+        if getattr(u, "bot", False) or getattr(u, "deleted", False):
+            continue
+        name = " ".join(x for x in (u.first_name, u.last_name) if x) or str(u.id)
+        lines.append(f"@{u.username}" if u.username else f"(không có username) {name}")
+    body = "\n".join(f"{i}. {x}" for i, x in enumerate(lines, 1))
+    return f"👥 Nhóm có {len(lines)} thành viên (không tính bot):\n{body}"
 
 
 async def review_loop(group):
@@ -188,6 +207,14 @@ async def review_loop(group):
         try:
             await asyncio.sleep(20)
             now = dt.datetime.now(bot.TZ)
+            mreq = bot.db.execute("SELECT val FROM seen WHERE key='members_req'").fetchone()
+            if mreq and mreq[0] == "1":
+                bot.db.execute("INSERT OR REPLACE INTO seen VALUES('members_req','0')"); bot.db.commit()
+                txt = await list_members(group)
+                log.info(txt)
+                for i in range(0, len(txt), 3500):
+                    await notify_admin(txt[i:i + 3500])
+                continue
             req = bot.db.execute("SELECT val FROM seen WHERE key='review_req'").fetchone()
             if req and req[0] == "1":
                 bot.db.execute("INSERT OR REPLACE INTO seen VALUES('review_req','0')"); bot.db.commit()
