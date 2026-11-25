@@ -20,10 +20,10 @@ GROUP_ID = int(os.getenv("GROUP_ID", 0) or 0)
 KT_TIME = os.getenv("KT_CHECK_TIME", "23:30")
 KT_DAYS = tuple(int(d) for d in os.getenv("KT_DAYS", "0,1,2,3,4,5,6").split(","))
 CN_GD_TIME = os.getenv("CN_GIAODUC_TIME", "09:30")
-CN_DL_TIME = os.getenv("CN_DANGLE_TIME", "11:05")
+CN_DL_TIME = os.getenv("CN_DANGLE_TIME", "11:00")
 THU5_TIME = os.getenv("THU5_TIME", "08:00")
 THU4_TIME = os.getenv("THU4_TIME", "11:00")
-MANA_TIME = os.getenv("MANA_CHECK_TIME", "17:31")
+MANA_TIME = os.getenv("MANA_CHECK_TIME", "17:30")
 MANA_DAYS = tuple(int(d) for d in os.getenv("MANA_DAYS", "0,1,2,3,4,5,6").split(","))
 TEMPLATE_FILE = "template.txt"
 
@@ -357,6 +357,18 @@ def process_paste(text: str):
     return rep
 
 
+def mana_frame(day: dt.date) -> str:
+    """Bảng kết quả Mana đã gộp: ⭕️ đã điểm danh, ❌ báo vắng (kèm lý do), ➖ chưa điểm danh."""
+    lines = [f"🌈 KẾT QUẢ ĐIỂM DANH MANA [{day:%d.%m}]", ""]
+    for i, (code, st, note) in enumerate(mana_rows(day), 1):
+        note = note.replace("⭕️", "").replace("⭕", "").strip(" -/")
+        mark = {"ok": "⭕️" + (f"-{note}" if note else ""),
+                "absent": "❌" + (f"-{note}" if note else ""), "missing": "➖"}[st]
+        lines.append(f"{i}. {code}/{mark}")
+    lines += ["", "-Hết-"]
+    return "\n".join(lines)
+
+
 async def mana_job(ctx: ContextTypes.DEFAULT_TYPE):
     now = dt.datetime.now(TZ)
     if now.weekday() not in MANA_DAYS:
@@ -364,15 +376,23 @@ async def mana_job(ctx: ContextTypes.DEFAULT_TYPE):
     if not mana_rows(now.date()):
         return await send_admin(ctx.bot, f"⏰ Đã quá {MANA_TIME[:5]} nhưng tôi chưa thấy bài Mana hôm nay trong nhóm. "
                       "Bạn có thể copy bài dán vào đây để tôi đối chiếu.")
+    await send_admin(ctx.bot, mana_frame(now.date()))
     await send_admin(ctx.bot, mana_line(now.date()))
+    relay(mana_frame(now.date()))
     relay(mana_line(now.date()))
 
 
 async def mana_prenotice(ctx: ContextTypes.DEFAULT_TYPE):
     now = dt.datetime.now(TZ)
-    if now.weekday() in MANA_DAYS and not mana_rows(now.date()):  # chỉ nhắc khi chưa có dữ liệu
-        await send_admin(ctx.bot, f"🔔 Sắp {MANA_TIME[:5]} mà tôi chưa thấy bài Mana hôm nay trong nhóm. "
+    if now.weekday() not in MANA_DAYS:
+        return
+    if not mana_rows(now.date()):  # chưa có bài trong nhóm: chỉ nhắc riêng bạn
+        return await send_admin(ctx.bot, f"🔔 Sắp {MANA_TIME[:5]} mà tôi chưa thấy bài Mana hôm nay trong nhóm. "
                       "Nếu có, bạn copy bài dán vào đây giúp.")
+    if any(st == "missing" for _, st, _ in mana_rows(now.date())):  # có người chưa điểm danh: báo bạn rồi chuyển chị
+        line = mana_line(now.date())
+        await send_admin(ctx.bot, line)
+        relay(line)
 
 
 # ---------- báo cáo tuần (mỗi người 7 ô T2..CN) ----------
@@ -546,9 +566,14 @@ async def kt_job(ctx: ContextTypes.DEFAULT_TYPE):
 
 async def kt_prenotice(ctx: ContextTypes.DEFAULT_TYPE):
     now = dt.datetime.now(TZ)
-    if now.weekday() in KT_DAYS and not kt_rows(week_monday()):
-        await send_admin(ctx.bot, f"🔔 Sắp {KT_TIME[:5]} mà tôi chưa thấy bài Cảm nhận KT tuần này trong nhóm. "
+    if now.weekday() not in KT_DAYS:
+        return
+    start = week_monday()
+    if not kt_rows(start):  # chưa có bài trong nhóm: chỉ nhắc riêng bạn
+        return await send_admin(ctx.bot, f"🔔 Sắp {KT_TIME[:5]} mà tôi chưa thấy bài Cảm nhận KT tuần này trong nhóm. "
                       "Nếu có, bạn copy bài dán vào đây giúp.")
+    if kt_missing(start):  # có người chưa cảm nhận: báo riêng bạn để bạn nhắc họ
+        await send_admin(ctx.bot, kt_summary(start))
 
 
 # ---------- tin nhắn cố định gửi cho bạn lúc 11:00 thứ 4 (nội dung nằm trong msg_thu4.txt, gửi y nguyên) ----------
@@ -600,6 +625,14 @@ async def thu5_job(ctx: ContextTypes.DEFAULT_TYPE):
 @admin_only
 async def thu5(update: Update, ctx):
     await update.message.reply_text(render_thu5())
+
+
+@admin_only
+async def rasoat(update: Update, ctx):
+    """Yêu cầu reader rà soát ngay bảng điểm danh hôm nay (chỉ báo cho bạn, không chuyển sang chị) (kết quả được báo riêng trong vài chục giây)."""
+    db.execute("INSERT OR REPLACE INTO seen VALUES('review_req','1')")
+    db.commit()
+    await update.message.reply_text("Đang rà soát bảng điểm danh hôm nay trong nhóm, tôi sẽ báo kết quả ngay (chỉ gửi riêng bạn).")
 
 
 @admin_only
@@ -687,6 +720,7 @@ async def setup_profile(app):
         BotCommand("danhsach", "Xem danh sách lớp"),
         BotCommand("mau", "Đặt mẫu tin điểm danh"),
         BotCommand("test", "Nhắc điểm danh thử"),
+        BotCommand("rasoat", "Rà soát ngay bảng điểm danh hôm nay"),
         BotCommand("kt", "Khung + báo cáo Cảm nhận KT"),
         BotCommand("chuyen", "Bật/tắt tự gửi báo cáo cho chị"),
         BotCommand("tudong", "Bật/tắt tự động trả lời đang bận"),
@@ -704,7 +738,7 @@ async def setup_profile(app):
 def main():
     app = Application.builder().token(TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30).concurrent_updates(True).post_init(setup_profile).build()
     for name, fn in [("myid", myid), ("start", start), ("lop", lop), ("danhsach", danhsach),
-                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("thu5", thu5), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
+                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("rasoat", rasoat), ("thu5", thu5), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
         app.add_handler(CommandHandler(name, fn))
     P = filters.ChatType.PRIVATE
     app.add_handler(ChatMemberHandler(on_added, ChatMemberHandler.MY_CHAT_MEMBER))
@@ -717,7 +751,7 @@ def main():
         app.job_queue.run_daily(reminder_job, dt.time(h, m, tzinfo=TZ), data=t)
     h, m = map(int, MANA_TIME.split(":"))
     app.job_queue.run_daily(mana_job, dt.time(h, m, tzinfo=TZ))
-    pre = dt.datetime.combine(dt.date.today(), dt.time(h, m)) - dt.timedelta(minutes=6)
+    pre = dt.datetime.combine(dt.date.today(), dt.time(h, m)) - dt.timedelta(minutes=5)
     app.job_queue.run_daily(mana_prenotice, dt.time(pre.hour, pre.minute, tzinfo=TZ))
     for path, hhmm in (("msg_cn_giaoduc.txt", CN_GD_TIME), ("msg_cn_dangle.txt", CN_DL_TIME)):
         fh, fm = map(int, hhmm.split(":"))
@@ -728,7 +762,7 @@ def main():
     app.job_queue.run_daily(thu4_job, dt.time(th, tm, tzinfo=TZ))
     kh, km = map(int, KT_TIME.split(":"))
     app.job_queue.run_daily(kt_job, dt.time(kh, km, tzinfo=TZ))
-    kpre = dt.datetime.combine(dt.date.today(), dt.time(kh, km)) - dt.timedelta(minutes=6)
+    kpre = dt.datetime.combine(dt.date.today(), dt.time(kh, km)) - dt.timedelta(minutes=5)
     app.job_queue.run_daily(kt_prenotice, dt.time(kpre.hour, kpre.minute, tzinfo=TZ))
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

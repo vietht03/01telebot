@@ -97,6 +97,120 @@ async def delayed_reply(chat_id, user_id, msg_date):
         log.exception("Lỗi khi tự trả lời")
     finally:
         pending.discard(user_id)
+# ---- rà soát bảng điểm danh: 21:50 thứ 4 (dâng lễ thứ 4) và 19:10 Chủ nhật (giáo dục + dâng lễ CN) ----
+# Mỗi dòng: ⭕ = đã điểm danh, ❌ = hôm đó không tham gia, còn lại (trống/chưa có ⭕) = chưa điểm danh.
+# Báo cho bạn ngay, rồi chuyển tiếp sang chị (RELAY_TARGET) từ tài khoản của bạn.
+GD = ("diem danh giao duc truoc le chu nhat", "Giáo dục trước lễ CN")
+DL_CN = ("diem danh dang le chu nhat", "Dâng lễ Chủ nhật")
+REVIEWS = [  # id, thứ (0=T2), giờ rà soát, các bảng, có báo cả người ❌ không
+    dict(id="t4", wd=2, at=_hm(os.getenv("THU4_REVIEW_TIME", "21:50")), tables=[("diem danh dang le thu 4", "Dâng lễ thứ 4")], absent=True),
+    dict(id="cn_gd", wd=6, at=_hm(os.getenv("CN_GD_REVIEW_TIME", "10:00")), tables=[GD], absent=False),
+    dict(id="cn", wd=6, at=_hm(os.getenv("CN_REVIEW_TIME", "19:10")), tables=[GD, DL_CN], absent=True),
+]
+REVIEW_GRACE = 30 * 60  # reader khởi động trễ quá 30 phút sau giờ hẹn thì bỏ, không báo muộn
+_RANK = {"missing": 0, "absent": 1, "ok": 2}
+
+
+def mark_status(rest: str):
+    """-> (trạng thái, ghi chú): ok nếu có ⭕, absent nếu có ❌, còn lại missing."""
+    if "⭕" in rest:
+        return "ok", ""
+    if "❌" in rest:
+        return "absent", rest.replace("❌", "", 1).strip(" -/")
+    return "missing", ""
+
+
+def table_status(msgs, title: str):
+    """Gộp mọi bản của một bảng điểm danh trong các tin -> [(mã, trạng thái, ghi chú)]; None nếu không thấy bảng."""
+    rows, found = {}, False
+    for m in msgs:
+        text = m.text or ""
+        if title not in bot.norm(text):
+            continue
+        lines = [bot.ROW.match(x) for x in text.splitlines()]
+        lines = [x for x in lines if x]
+        if len(lines) < 3:
+            continue
+        found = True
+        for mt in lines:
+            st = mark_status(mt.group(2).strip())
+            old = rows.get(mt.group(1))
+            if old is None or _RANK[st[0]] > _RANK[old[0]]:
+                rows[mt.group(1)] = st
+    return [(c, st, note) for c, (st, note) in rows.items()] if found else None
+
+
+def review_text(rows, label: str, day: dt.date, at: str, with_absent: bool = True):
+    """-> (văn bản, có người cần báo hay không)."""
+    miss = [c for c, st, _ in rows if st == "missing"]
+    absent = [f"{c} ({n})" if n else c for c, st, n in rows if st == "absent"] if with_absent else []
+    head = f"📋 {label} {day:%d/%m} — lúc {at}:"
+    if not miss and not absent:
+        return f"{head} tất cả đã điểm danh ⭕️ ✅", False
+    parts = [head]
+    if miss:
+        parts.append(f"⭕️ Chưa điểm danh ({len(miss)}): " + ", ".join(miss))
+    if absent:
+        parts.append(f"❌ Không tham gia ({len(absent)}): " + ", ".join(absent))
+    return "\n".join(parts), True
+
+
+async def run_review(group, rv: dict, at: str, relay_out: bool):
+    now = dt.datetime.now(bot.TZ)
+    start = dt.datetime.combine(now.date(), dt.time(0, 0), tzinfo=bot.TZ)
+    msgs = []
+    async for m in client.iter_messages(group, limit=1500):
+        if m.date < start:
+            break
+        msgs.append(m)
+    outs, notices = [], []
+    for title, label in rv["tables"]:
+        rows = table_status(msgs, title)
+        if rows is None:
+            notices.append(f"📋 {label} {now:%d/%m}: tôi chưa thấy bảng điểm danh này trong nhóm.")
+            continue
+        text, alert = review_text(rows, label, now.date(), at, rv["absent"])
+        if alert:
+            outs.append(text)
+        else:
+            notices.append(text)
+    for t in notices:
+        await notify_admin(t)
+    if outs:
+        full = "\n\n".join(outs)
+        await notify_admin(full)
+        if relay_out:
+            bot.relay(full)  # reader sẽ gửi cho chị từ tài khoản của bạn (tắt bằng /chuyen off)
+
+
+async def review_loop(group):
+    while True:
+        try:
+            await asyncio.sleep(20)
+            now = dt.datetime.now(bot.TZ)
+            req = bot.db.execute("SELECT val FROM seen WHERE key='review_req'").fetchone()
+            if req and req[0] == "1":
+                bot.db.execute("INSERT OR REPLACE INTO seen VALUES('review_req','0')"); bot.db.commit()
+                today = [r for r in REVIEWS if r["wd"] == now.weekday()]
+                if today:  # rà soát tay: dùng lượt đầy đủ nhất (cuối ngày), chỉ báo riêng bạn
+                    await run_review(group, max(today, key=lambda r: r["at"]), f"{now:%H:%M}", relay_out=False)
+                else:
+                    await notify_admin("Hôm nay không phải thứ 4 hay Chủ nhật nên không có bảng cần rà soát.")
+                continue
+            for rv in REVIEWS:
+                if rv["wd"] != now.weekday():
+                    continue
+                due = dt.datetime.combine(now.date(), rv["at"], tzinfo=bot.TZ)
+                key = f"review_done:{rv['id']}"
+                done = bot.db.execute("SELECT val FROM seen WHERE key=?", (key,)).fetchone()
+                if due <= now < due + dt.timedelta(seconds=REVIEW_GRACE) and not (done and done[0] == now.date().isoformat()):
+                    bot.db.execute("INSERT OR REPLACE INTO seen VALUES(?,?)", (key, now.date().isoformat())); bot.db.commit()
+                    await run_review(group, rv, f"{due:%H:%M}", relay_out=True)
+        except Exception:
+            log.exception("Lỗi khi rà soát bảng điểm danh")
+            await asyncio.sleep(60)
+
+
 client = TelegramClient(os.path.join(HERE, "tg_reader"), int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
 
 
@@ -163,6 +277,7 @@ async def main():
         pending.add(sender.id)
         asyncio.create_task(delayed_reply(event.chat_id, sender.id, event.message.date))
 
+    asyncio.create_task(review_loop(group))
     if RELAY_TARGET:
         asyncio.create_task(outbox_loop())
     await client.run_until_disconnected()
