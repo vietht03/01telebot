@@ -97,22 +97,25 @@ async def delayed_reply(chat_id, user_id, msg_date):
         log.exception("Lỗi khi tự trả lời")
     finally:
         pending.discard(user_id)
-# ---- rà soát bảng điểm danh: 21:50 thứ 4 (dâng lễ thứ 4) và 19:10 Chủ nhật (giáo dục + dâng lễ CN) ----
+# ---- rà soát bảng điểm danh: forward nguyên bảng gốc rồi nhắc người chưa điểm danh ----
 # Mỗi dòng: ⭕ = đã điểm danh, ❌ = hôm đó không tham gia, còn lại (trống/chưa có ⭕) = chưa điểm danh.
 # Báo cho bạn ngay, rồi chuyển tiếp sang chị (RELAY_TARGET) từ tài khoản của bạn.
 GD = ("diem danh giao duc truoc le chu nhat", "Giáo dục trước lễ CN")
 DL_CN = ("diem danh dang le chu nhat", "Dâng lễ Chủ nhật")
 LN = ("diem danh tham gia le nhom", "Tham gia lễ nhóm")
 ST = ("diem danh giao duc sach sang tao troi dat", "Giáo dục sách Sáng tạo Trời Đất")
-REVIEWS = [  # id, thứ (0=T2), giờ rà soát, các bảng, có báo cả người ❌ không
-    # tối thứ 3 21:50: bảng kết quả + tin nhắc @username, gửi bạn rồi chuyển chị
-    dict(id="t3", wd=1, at=_hm(os.getenv("THU3_REVIEW_TIME", "21:50")), tables=[ST], absent=False, frame=True, list=False),
-    dict(id="t4", wd=2, at=_hm(os.getenv("THU4_REVIEW_TIME", "21:50")), tables=[("diem danh dang le thu 4", "Dâng lễ thứ 4")], absent=True),
-    dict(id="cn_gd", wd=6, at=_hm(os.getenv("CN_GD_REVIEW_TIME", "10:00")), tables=[GD], absent=False),
-    # tối thứ 7: 20:58 tin nhắc có @username, 21:00 bảng kết quả + ai chưa điểm danh
-    dict(id="t7", wd=5, at=_hm(os.getenv("THU7_REVIEW_TIME", "21:00")), tables=[LN], absent=True, frame=True, mention=False),
+REVIEWS = [  # id, thứ (0=T2), giờ rà soát, các bảng; nhac=True: chỉ nhắc, không forward bảng
+    # mỗi lượt: tin 1 = forward nguyên bảng gốc (cho bạn qua Saved Messages và cho chị qua tài khoản của bạn),
+    # tin 2 = "Dạ anh chị @a @b điểm danh ... giúp em nha ạ" cho những người chưa điểm danh
+    dict(id="t3", wd=1, at=_hm(os.getenv("THU3_REVIEW_TIME", "21:50")), tables=[ST]),
+    dict(id="t4", wd=2, at=_hm(os.getenv("THU4_REVIEW_TIME", "21:50")), tables=[("diem danh dang le thu 4", "Dâng lễ thứ 4")]),
+    dict(id="cn_gd", wd=6, at=_hm(os.getenv("CN_GD_REVIEW_TIME", "10:00")), tables=[GD]),
+    dict(id="t7", wd=5, at=_hm(os.getenv("THU7_REVIEW_TIME", "21:00")), tables=[LN]),
     dict(id="t7_nhac", wd=5, at=_hm(os.getenv("THU7_NHAC_TIME", "20:58")), tables=[LN], nhac=True),
-    dict(id="cn", wd=6, at=_hm(os.getenv("CN_REVIEW_TIME", "19:10")), tables=[GD, DL_CN], absent=True),
+    dict(id="cn", wd=6, at=_hm(os.getenv("CN_REVIEW_TIME", "19:10")), tables=[GD, DL_CN]),
+    # hằng ngày: forward nguyên bài Mana (17:30) / bài Cảm nhận KT (23:30) trong nhóm, rồi tới dòng "có ... chưa ..."
+    dict(id="mana", days=bot.MANA_DAYS, at=_hm(bot.MANA_TIME), post="mana"),
+    dict(id="kt", days=bot.KT_DAYS, at=_hm(bot.KT_TIME), post="kt"),
 ]
 REVIEW_GRACE = 30 * 60  # reader khởi động trễ quá 30 phút sau giờ hẹn thì bỏ, không báo muộn
 _RANK = {"missing": 0, "absent": 1, "ok": 2}
@@ -147,28 +150,28 @@ def table_status(msgs, title: str):
     return [(c, st, note) for c, (st, note) in rows.items()] if found else None
 
 
-def review_frame(rows, label: str, day: dt.date) -> str:
-    """Bảng kết quả gộp: ⭕️ đã điểm danh, ❌ báo vắng (kèm lý do), ➖ chưa điểm danh."""
-    lines = [f"🌈 KẾT QUẢ ĐIỂM DANH {label.upper()} [{day:%d.%m}]", ""]
-    for i, (code, st, note) in enumerate(rows, 1):
-        mark = {"ok": "⭕️", "absent": "❌" + (f"-{note}" if note else ""), "missing": "➖"}[st]
-        lines.append(f"{i}. {code}/{mark}")
-    return "\n".join(lines + ["", "-Hết-"])
+def table_message(msgs, title: str):
+    """Tin mới nhất chứa bảng `title` (msgs xếp từ mới đến cũ)."""
+    for m in msgs:
+        text = m.text or ""
+        if title in bot.norm(text) and sum(1 for x in text.splitlines() if bot.ROW.match(x)) >= 3:
+            return m
+    return None
 
 
-def review_text(rows, label: str, day: dt.date, at: str, with_absent: bool = True):
-    """-> (văn bản, có người cần báo hay không)."""
-    miss = [c for c, st, _ in rows if st == "missing"]
-    absent = [f"{c} ({n})" if n else c for c, st, n in rows if st == "absent"] if with_absent else []
-    head = f"📋 {label} {day:%d/%m} — lúc {at}:"
-    if not miss and not absent:
-        return f"{head} tất cả đã điểm danh ⭕️ ✅", False
-    parts = [head]
-    if miss:
-        parts.append(f"⭕️ Chưa điểm danh ({len(miss)}): " + ", ".join(miss))
-    if absent:
-        parts.append(f"❌ Không tham gia ({len(absent)}): " + ", ".join(absent))
-    return "\n".join(parts), True
+async def forward_table(group, msg, relay_out: bool):
+    """Forward nguyên bảng gốc: cho bạn (Saved Messages) và, nếu relay_out, cho chị bằng tài khoản của bạn."""
+    global relay_entity
+    await client.forward_messages("me", msg.id, group)
+    await notify_admin("📌 Đã forward nguyên bảng điểm danh vào Saved Messages của bạn.")
+    if relay_out and bot.relay_on():
+        if relay_entity is None:
+            relay_entity = await client.get_entity(RELAY_TARGET)
+        await client.forward_messages(relay_entity, msg.id, group)
+        await notify_admin(f"✅ Đã forward nguyên bảng cho chị ({RELAY_TARGET}).")
+
+
+relay_entity = None
 
 
 async def run_review(group, rv: dict, at: str, relay_out: bool):
@@ -179,53 +182,57 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
         if m.date < start:
             break
         msgs.append(m)
-    outs, notices, mentions = [], [], []
     relay_out = relay_out and rv.get("relay", True)
     for title, label in rv["tables"]:
         rows = table_status(msgs, title)
-        if rows is not None and rv.get("nhac"):  # 21:58: chỉ nhắc những người vẫn chưa điểm danh
-            miss = [c for c, st, _ in rows if st == "missing"]
-            names = bot.load_usernames()
-            users = [names[c.split("-")[0].strip()] for c in miss if c.split("-")[0].strip() in names]
-            if users:
-                text = f"Dạ anh chị {', '.join(users)} điểm danh {label.lower()} giúp em nha ạ"
-                await notify_admin(text)
-                if relay_out:
-                    bot.relay(text)
-            continue
-        if rows is not None and rv.get("frame"):  # gửi bảng điểm danh trước
-            frame = review_frame(rows, label, now.date())
-            await notify_admin(frame)
-            if relay_out:
-                bot.relay(frame)
         if rows is None:
-            notices.append(f"📋 {label} {now:%d/%m}: tôi chưa thấy bảng điểm danh này trong nhóm.")
+            await notify_admin(f"📋 {label} {now:%d/%m}: tôi chưa thấy bảng điểm danh này trong nhóm.")
             continue
-        if not rv.get("list", True):  # chỉ gửi bảng + tin nhắc @username, không gửi danh sách chưa điểm danh
-            mention = bot.mention_msg([c for c, st, _ in rows if st == "missing"], f"điểm danh {label}")
-            if mention:
-                mentions.append(mention)
-            continue
-        text, alert = review_text(rows, label, now.date(), at, rv["absent"])
-        if alert:
-            outs.append(text)
-            mention = rv.get("mention", True) and bot.mention_msg([c for c, st, _ in rows if st == "missing"], f"điểm danh {label}")
-            if mention:
-                mentions.append(mention)
-        else:
-            notices.append(text)
-    for t in notices:
-        await notify_admin(t)
-    if outs or mentions:
-        full = "\n\n".join(outs)
-        if full:
-            await notify_admin(full)
-        if full and relay_out:
-            bot.relay(full)  # reader sẽ gửi cho chị từ tài khoản của bạn (tắt bằng /chuyen off)
-        for mention in mentions:  # tin nhắc người còn thiếu: gửi bạn, rồi chuyển chị khi là lượt tự động
-            await notify_admin(mention)
+        if not rv.get("nhac"):  # tin 1: forward nguyên bảng gốc
+            await forward_table(group, table_message(msgs, title), relay_out)
+        # tin 2: nhắc những người chưa điểm danh
+        miss = [c for c, st, _ in rows if st == "missing"]
+        names = bot.load_usernames()
+        users = [names[c.split("-")[0].strip()] for c in miss if c.split("-")[0].strip() in names]
+        if users:
+            text = f"Dạ anh chị {' '.join(users)} điểm danh {label.lower()} giúp em nha ạ"
+            await notify_admin(text)
             if relay_out:
-                bot.relay(mention)
+                bot.relay(text)
+        elif not miss:
+            await notify_admin(f"📋 {label} {now:%d/%m} — lúc {at}: tất cả đã điểm danh ⭕️ ✅")
+        else:
+            await notify_admin(f"📋 {label} {now:%d/%m}: còn {len(miss)} người chưa điểm danh nhưng chưa có @username trong usernames.txt: " + ", ".join(miss))
+
+
+POSTS = {  # loại bài -> (hàm nhận dạng, nhãn, có lấy từ đầu tuần không)
+    "mana": (bot.is_mana, "Mana", False),
+    "kt": (bot.is_kt, "Cảm nhận KT", True),
+}
+
+
+async def run_post(group, rv: dict, relay_out: bool):
+    """Tin 1: forward nguyên bài Mana/KT mới nhất trong nhóm. Tin 2: dòng 'có ... chưa ...' (gửi bạn rồi chuyển chị)."""
+    is_post, label, weekly = POSTS[rv["post"]]
+    now = dt.datetime.now(bot.TZ)
+    day0 = bot.week_monday() if weekly else now.date()
+    start = dt.datetime.combine(day0, dt.time(0, 0), tzinfo=bot.TZ)
+    found = None
+    async for m in client.iter_messages(group, limit=3000):
+        if m.date < start:
+            break
+        if m.text and is_post(m.text):
+            found = m
+            break
+    if found is None:
+        scope = "tuần này" if weekly else "hôm nay"
+        return await notify_admin(f"⏰ Đã quá {rv['at']:%H:%M} nhưng tôi chưa thấy bài {label} {scope} trong nhóm. "
+                                  "Bạn có thể copy bài dán vào đây để tôi đối chiếu.")
+    await forward_table(group, found, relay_out and rv.get("relay", True))
+    line = bot.kt_summary(day0) if weekly else bot.mana_line(now.date())
+    await notify_admin(line)
+    if relay_out and rv.get("relay", True):
+        bot.relay(line)
 
 
 async def list_members(group) -> str:
@@ -253,24 +260,32 @@ async def review_loop(group):
                 for i in range(0, len(txt), 3500):
                     await notify_admin(txt[i:i + 3500])
                 continue
+            preq = bot.db.execute("SELECT val FROM seen WHERE key='post_req'").fetchone()
+            if preq and preq[0].rstrip("!") in POSTS:  # chạy tay lượt Mana/KT: chỉ gửi bạn; thêm "!" (vd "mana!") thì gửi cả chị
+                bot.db.execute("INSERT OR REPLACE INTO seen VALUES('post_req','')"); bot.db.commit()
+                await run_post(group, next(r for r in REVIEWS if r.get("post") == preq[0].rstrip("!")), relay_out=preq[0].endswith("!"))
+                continue
             req = bot.db.execute("SELECT val FROM seen WHERE key='review_req'").fetchone()
             if req and req[0] == "1":
                 bot.db.execute("INSERT OR REPLACE INTO seen VALUES('review_req','0')"); bot.db.commit()
-                today = [r for r in REVIEWS if r["wd"] == now.weekday() and not r.get("nhac")]
+                today = [r for r in REVIEWS if r.get("wd") == now.weekday() and not r.get("nhac")]
                 if today:  # rà soát tay: dùng lượt đầy đủ nhất (cuối ngày), chỉ báo riêng bạn
                     await run_review(group, max(today, key=lambda r: r["at"]), f"{now:%H:%M}", relay_out=False)
                 else:
                     await notify_admin("Hôm nay không phải thứ 3, 4, 7 hay Chủ nhật nên không có bảng cần rà soát.")
                 continue
             for rv in REVIEWS:
-                if rv["wd"] != now.weekday():
+                if now.weekday() not in (rv.get("days") or (rv["wd"],)):
                     continue
                 due = dt.datetime.combine(now.date(), rv["at"], tzinfo=bot.TZ)
                 key = f"review_done:{rv['id']}"
                 done = bot.db.execute("SELECT val FROM seen WHERE key=?", (key,)).fetchone()
                 if due <= now < due + dt.timedelta(seconds=REVIEW_GRACE) and not (done and done[0] == now.date().isoformat()):
                     bot.db.execute("INSERT OR REPLACE INTO seen VALUES(?,?)", (key, now.date().isoformat())); bot.db.commit()
-                    await run_review(group, rv, f"{due:%H:%M}", relay_out=True)
+                    if rv.get("post"):
+                        await run_post(group, rv, relay_out=True)
+                    else:
+                        await run_review(group, rv, f"{due:%H:%M}", relay_out=True)
         except Exception:
             log.exception("Lỗi khi rà soát bảng điểm danh")
             await asyncio.sleep(60)

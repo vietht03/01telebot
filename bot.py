@@ -399,19 +399,6 @@ async def send_mention(bot_, codes, phrase: str):
         relay(msg)  # chuyển cho chị từ tài khoản của bạn (tắt bằng /chuyen off)
 
 
-async def mana_job(ctx: ContextTypes.DEFAULT_TYPE):
-    now = dt.datetime.now(TZ)
-    if now.weekday() not in MANA_DAYS:
-        return
-    if not mana_rows(now.date()):
-        return await send_admin(ctx.bot, f"⏰ Đã quá {MANA_TIME[:5]} nhưng tôi chưa thấy bài Mana hôm nay trong nhóm. "
-                      "Bạn có thể copy bài dán vào đây để tôi đối chiếu.")
-    await send_admin(ctx.bot, mana_frame(now.date()))
-    await send_admin(ctx.bot, mana_line(now.date()))
-    relay(mana_frame(now.date()))
-    relay(mana_line(now.date()))
-
-
 async def mana_prenotice(ctx: ContextTypes.DEFAULT_TYPE):
     now = dt.datetime.now(TZ)
     if now.weekday() not in MANA_DAYS:
@@ -579,20 +566,6 @@ def kt_report(start: dt.date) -> str:
     seen = db.execute("SELECT val FROM seen WHERE key=?", ("kt:" + start.isoformat(),)).fetchone()
     return (f"📖 Cảm nhận KT" + (f" (cập nhật lúc {seen[0]})" if seen else "") + "\n"
             + weekly_core(kt_rows(start), start))
-
-
-async def kt_job(ctx: ContextTypes.DEFAULT_TYPE):
-    now = dt.datetime.now(TZ)
-    if now.weekday() not in KT_DAYS:
-        return
-    start = week_monday()
-    if not kt_rows(start):
-        return await send_admin(ctx.bot, f"⏰ Đã quá {KT_TIME[:5]} nhưng tôi chưa thấy bài Cảm nhận KT tuần này trong nhóm. "
-                      "Bạn có thể copy bài dán vào đây để tôi đối chiếu.")
-    await send_admin(ctx.bot, kt_frame(start))
-    await send_admin(ctx.bot, kt_summary(start))
-    relay(kt_frame(start))
-    relay(kt_summary(start))
 
 
 async def kt_prenotice(ctx: ContextTypes.DEFAULT_TYPE):
@@ -794,7 +767,6 @@ def main():
         h, m = map(int, t.split(":"))
         app.job_queue.run_daily(reminder_job, dt.time(h, m, tzinfo=TZ), data=t)
     h, m = map(int, MANA_TIME.split(":"))
-    app.job_queue.run_daily(mana_job, dt.time(h, m, tzinfo=TZ))
     pre = dt.datetime.combine(dt.date.today(), dt.time(h, m)) - dt.timedelta(minutes=5)
     app.job_queue.run_daily(mana_prenotice, dt.time(pre.hour, pre.minute, tzinfo=TZ))
     for path, hhmm in (("msg_cn_giaoduc.txt", CN_GD_TIME), ("msg_cn_dangle.txt", CN_DL_TIME)):
@@ -809,7 +781,6 @@ def main():
     th, tm = map(int, THU4_TIME.split(":"))
     app.job_queue.run_daily(thu4_job, dt.time(th, tm, tzinfo=TZ))
     kh, km = map(int, KT_TIME.split(":"))
-    app.job_queue.run_daily(kt_job, dt.time(kh, km, tzinfo=TZ))
     kpre = dt.datetime.combine(dt.date.today(), dt.time(kh, km)) - dt.timedelta(minutes=5)
     app.job_queue.run_daily(kt_prenotice, dt.time(kpre.hour, kpre.minute, tzinfo=TZ))
     app.run_polling(allowed_updates=Update.ALL_TYPES)
