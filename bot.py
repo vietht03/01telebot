@@ -752,6 +752,17 @@ async def setup_profile(app):
         print("Không đặt được ảnh đại diện (hãy dùng BotFather /setuserpic):", e, flush=True)
 
 
+JOB_GRACE = int(os.getenv("JOB_GRACE_S", "5400"))  # điện thoại ngủ làm bot dậy trễ: vẫn chạy bù nếu trễ không quá 90 phút
+
+
+def daily(app, cb, when, **kw):
+    app.job_queue.run_daily(cb, when, job_kwargs={"misfire_grace_time": JOB_GRACE, "coalesce": True}, **kw)
+
+
+async def on_error(update, ctx):
+    logging.error("Lỗi chưa xử lý: %s", ctx.error, exc_info=ctx.error if not isinstance(ctx.error, (OSError,)) else None)
+
+
 def main():
     app = Application.builder().token(TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30).concurrent_updates(True).post_init(setup_profile).build()
     for name, fn in [("myid", myid), ("start", start), ("lop", lop), ("danhsach", danhsach),
@@ -765,24 +776,25 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & P, ask))
     for t in TIMES:
         h, m = map(int, t.split(":"))
-        app.job_queue.run_daily(reminder_job, dt.time(h, m, tzinfo=TZ), data=t)
+        daily(app, reminder_job, dt.time(h, m, tzinfo=TZ), data=t)
     h, m = map(int, MANA_TIME.split(":"))
     pre = dt.datetime.combine(dt.date.today(), dt.time(h, m)) - dt.timedelta(minutes=5)
-    app.job_queue.run_daily(mana_prenotice, dt.time(pre.hour, pre.minute, tzinfo=TZ))
+    daily(app, mana_prenotice, dt.time(pre.hour, pre.minute, tzinfo=TZ))
     for path, hhmm in (("msg_cn_giaoduc.txt", CN_GD_TIME), ("msg_cn_dangle.txt", CN_DL_TIME)):
         fh, fm = map(int, hhmm.split(":"))
-        app.job_queue.run_daily(make_form_job(path, 6), dt.time(fh, fm, tzinfo=TZ), name=path)  # 6 = Chủ nhật
+        daily(app, make_form_job(path, 6), dt.time(fh, fm, tzinfo=TZ), name=path)  # 6 = Chủ nhật
     t3h, t3m = map(int, THU3_TIME.split(":"))
-    app.job_queue.run_daily(make_form_job("msg_thu3.txt", 1), dt.time(t3h, t3m, tzinfo=TZ), name="msg_thu3.txt")  # 1 = thứ 3
+    daily(app, make_form_job("msg_thu3.txt", 1), dt.time(t3h, t3m, tzinfo=TZ), name="msg_thu3.txt")  # 1 = thứ 3
     t7h, t7m = map(int, THU7_TIME.split(":"))
-    app.job_queue.run_daily(make_form_job("msg_thu7.txt", 5), dt.time(t7h, t7m, tzinfo=TZ), name="msg_thu7.txt")  # 5 = thứ 7
+    daily(app, make_form_job("msg_thu7.txt", 5), dt.time(t7h, t7m, tzinfo=TZ), name="msg_thu7.txt")  # 5 = thứ 7
     t5h, t5m = map(int, THU5_TIME.split(":"))
-    app.job_queue.run_daily(thu5_job, dt.time(t5h, t5m, tzinfo=TZ))
+    daily(app, thu5_job, dt.time(t5h, t5m, tzinfo=TZ))
     th, tm = map(int, THU4_TIME.split(":"))
-    app.job_queue.run_daily(thu4_job, dt.time(th, tm, tzinfo=TZ))
+    daily(app, thu4_job, dt.time(th, tm, tzinfo=TZ))
     kh, km = map(int, KT_TIME.split(":"))
     kpre = dt.datetime.combine(dt.date.today(), dt.time(kh, km)) - dt.timedelta(minutes=5)
-    app.job_queue.run_daily(kt_prenotice, dt.time(kpre.hour, kpre.minute, tzinfo=TZ))
+    daily(app, kt_prenotice, dt.time(kpre.hour, kpre.minute, tzinfo=TZ))
+    app.add_error_handler(on_error)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

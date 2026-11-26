@@ -108,11 +108,12 @@ REVIEWS = [  # id, thứ (0=T2), giờ rà soát, các bảng; nhac=True: chỉ 
     # mỗi lượt: tin 1 = forward nguyên bảng gốc (cho bạn qua Saved Messages và cho chị qua tài khoản của bạn),
     # tin 2 = "Dạ anh chị @a @b điểm danh ... giúp em nha ạ" cho những người chưa điểm danh
     dict(id="t3", wd=1, at=_hm(os.getenv("THU3_REVIEW_TIME", "21:50")), tables=[ST]),
-    dict(id="t4", wd=2, at=_hm(os.getenv("THU4_REVIEW_TIME", "21:50")), tables=[("diem danh dang le thu 4", "Dâng lễ thứ 4")]),
+    dict(id="t5", wd=3, at=_hm(os.getenv("THU5_REVIEW_TIME", "08:50")), tables=[("diem danh jondo dan", "Jondo Dan")], count=True),
+    dict(id="t4", wd=2, at=_hm(os.getenv("THU4_REVIEW_TIME", "19:10")), tables=[("diem danh dang le thu 4", "Dâng lễ thứ 4")]),
     dict(id="cn_gd", wd=6, at=_hm(os.getenv("CN_GD_REVIEW_TIME", "10:00")), tables=[GD]),
     dict(id="t7", wd=5, at=_hm(os.getenv("THU7_REVIEW_TIME", "21:00")), tables=[LN]),
     dict(id="t7_nhac", wd=5, at=_hm(os.getenv("THU7_NHAC_TIME", "20:58")), tables=[LN], nhac=True),
-    dict(id="cn", wd=6, at=_hm(os.getenv("CN_REVIEW_TIME", "19:10")), tables=[GD, DL_CN]),
+    dict(id="cn", wd=6, at=_hm(os.getenv("CN_REVIEW_TIME", "11:40")), tables=[GD, DL_CN]),
     # hằng ngày: forward nguyên bài Mana (17:30) / bài Cảm nhận KT (23:30) trong nhóm, rồi tới dòng "có ... chưa ..."
     dict(id="mana", days=bot.MANA_DAYS, at=_hm(bot.MANA_TIME), post="mana"),
     dict(id="kt", days=bot.KT_DAYS, at=_hm(bot.KT_TIME), post="kt"),
@@ -159,11 +160,13 @@ def table_message(msgs, title: str):
     return None
 
 
-async def forward_table(group, msg, relay_out: bool):
-    """Forward nguyên bảng gốc: cho bạn (Saved Messages) và, nếu relay_out, cho chị bằng tài khoản của bạn."""
+async def forward_table(group, msg, relay_out: bool, count_text: str = None):
+    """Forward nguyên bảng gốc cho bạn (Saved Messages), báo số liệu (nếu có), rồi nếu relay_out thì forward cho chị bằng tài khoản của bạn."""
     global relay_entity
     await client.forward_messages("me", msg.id, group)
     await notify_admin("📌 Đã forward nguyên bảng điểm danh vào Saved Messages của bạn.")
+    if count_text:
+        await notify_admin(count_text)
     if relay_out and bot.relay_on():
         if relay_entity is None:
             relay_entity = await client.get_entity(RELAY_TARGET)
@@ -188,8 +191,15 @@ async def run_review(group, rv: dict, at: str, relay_out: bool):
         if rows is None:
             await notify_admin(f"📋 {label} {now:%d/%m}: tôi chưa thấy bảng điểm danh này trong nhóm.")
             continue
+        count_text = None
+        if rv.get("count"):  # báo số người vắng ngay sau khi forward cho bạn, trước khi chuyển cho chị
+            n_ok = sum(1 for _, st, _ in rows if st == "ok")
+            n_abs = sum(1 for _, st, _ in rows if st == "absent")
+            n_miss = sum(1 for _, st, _ in rows if st == "missing")
+            count_text = (f"📊 {label} {now:%d/%m} lúc {at}: {len(rows)} người — đã điểm danh ⭕️ {n_ok}, "
+                          f"vắng {n_abs + n_miss} (❌ {n_abs}, chưa điểm danh {n_miss}).")
         if not rv.get("nhac"):  # tin 1: forward nguyên bảng gốc
-            await forward_table(group, table_message(msgs, title), relay_out)
+            await forward_table(group, table_message(msgs, title), relay_out, count_text)
         # tin 2: nhắc những người chưa điểm danh
         miss = [c for c, st, _ in rows if st == "missing"]
         names = bot.load_usernames()
