@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS seen(key TEXT PRIMARY KEY, val TEXT);
 CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, kind TEXT, text TEXT);
 """)
 
+db.execute("CREATE TABLE IF NOT EXISTS kt_posts(src TEXT PRIMARY KEY, week TEXT, at TEXT, rows TEXT)")
 db.execute("CREATE TABLE IF NOT EXISTS mana_posts(src TEXT PRIMARY KEY, day TEXT, at TEXT, rows TEXT)")
 
 CHUNK, OVERLAP = 900, 150
@@ -105,10 +106,68 @@ def _question_days(q: str):
     return list(dict.fromkeys(days)) or [today - dt.timedelta(days=i) for i in range(3)]
 
 
+def _ask_time(q: str):
+    tm = re.search(r"(\d{1,2})\s*(?:h|g|:)\s*(\d{2})?", q.lower())
+    return f"{int(tm.group(1)):02d}:{int(tm.group(2) or 0):02d}" if tm and int(tm.group(1)) < 24 else None
+
+
+# ---------- lịch sử Cảm nhận KT: bảng tuần 7 ô T2..CN, ô có icon không bị bài sau xóa ----------
+_DN = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "CN"]
+
+
+def record_kt_post(src: str, week: str, at: dt.datetime, rows):
+    import json
+    db.execute("INSERT OR REPLACE INTO kt_posts VALUES(?,?,?,?)",
+               (src, week, at.astimezone(TZ).isoformat(timespec="seconds"), json.dumps(rows, ensure_ascii=False)))
+    db.commit()
+
+
+def kt_snapshots(week: str):
+    """[(datetime, {mã: [7 ô]})] sau từng bài của tuần."""
+    import json
+    state, out = {}, []
+    for at, rows in db.execute("SELECT at, rows FROM kt_posts WHERE week=? ORDER BY at", (week,)).fetchall():
+        for code, slots in json.loads(rows):
+            old = state.get(code, [""] * 7)
+            state[code] = [n or o for n, o in zip(slots, old)]
+        out.append((dt.datetime.fromisoformat(at), {c: list(v) for c, v in state.items()}))
+    return out
+
+
+def _kt_fmt(state, wd: int) -> str:
+    need = wd + 1
+    bad = [f"{c} (có {sum(1 for x in sl[:need] if x)}/{need}, trống: {', '.join(_DN[k] for k in range(need) if not sl[k])})"
+           for c, sl in state.items() if sum(1 for x in sl[:need] if x) < need]
+    return f"{len(state) - len(bad)}/{len(state)} người đủ icon tính đến {_DN[wd]}; CHƯA đủ: {', '.join(bad) or 'không ai'}"
+
+
+def kt_history_text(q: str) -> str:
+    """Cảm nhận KT của các ngày được hỏi. Người 'chưa cảm nhận' tại ngày D = có ít hơn (thứ của D) icon trong tuần."""
+    ask_at = _ask_time(q)
+    out = []
+    for day in _question_days(q):
+        week = (day - dt.timedelta(days=day.weekday())).isoformat()
+        snaps = kt_snapshots(week)
+        if not snaps:
+            out.append(f"Cảm nhận KT {day:%d/%m/%Y}: không có bài KT nào của tuần này được ghi nhận.")
+            continue
+        wd = day.weekday()
+        out.append(f"Cảm nhận KT {day:%d/%m/%Y} ({_DN[wd]}) — các mốc theo bài đăng trong nhóm:")
+        today_snaps = [(t, st) for t, st in snaps if t.date() == day]
+        carry = [(t, st) for t, st in snaps if t.date() < day]
+        if carry:
+            out.append(f"  đầu ngày (bài {carry[-1][0]:%d/%m %H:%M}): {_kt_fmt(carry[-1][1], wd)}")
+        out += [f"  {t:%H:%M}: {_kt_fmt(st, wd)}" for t, st in today_snaps]
+        if ask_at:
+            upto = [x for x in snaps if x[0].date() < day or (x[0].date() == day and f"{x[0]:%H:%M}" <= ask_at)]
+            out.append(f"  => Tại {ask_at}: " + (f"{_kt_fmt(upto[-1][1], wd)} (theo bài mới nhất {upto[-1][0]:%d/%m %H:%M})"
+                       if upto else "chưa có bài KT nào của tuần này trong nhóm"))
+    return "\n".join(out)
+
+
 def mana_history_text(q: str) -> str:
     """Lịch sử Mana của các ngày được hỏi, kèm trạng thái chính xác tại giờ được hỏi (vd 17h30)."""
-    tm = re.search(r"(\d{1,2})\s*(?:h|g|:)\s*(\d{2})?", q.lower())
-    ask_at = f"{int(tm.group(1)):02d}:{int(tm.group(2) or 0):02d}" if tm and int(tm.group(1)) < 24 else None
+    ask_at = _ask_time(q)
     out = []
     for day in _question_days(q):
         d = day.isoformat()
@@ -207,7 +266,9 @@ SYSTEM = (
     "nếu giờ hẹn đã qua mà không có trong nhật ký thì nói rõ là KHÔNG thấy bot gửi và gợi ý nguyên nhân từ nhật ký "
     "(bot khởi động lại, tạm dừng bằng /tat...); nếu chưa tới giờ hẹn thì nói là chưa tới giờ.\n"
     "LỊCH SỬ MANA cho biết trạng thái từng ngày theo từng bài đăng trong nhóm. Khi hỏi ai chưa điểm danh/báo cáo Mana "
-    "vào một ngày hoặc giờ cụ thể, dùng dòng '=> Tại HH:MM' (nếu có), liệt kê tên các mã trong 'CHƯA điểm danh' và nêu giờ của bài làm căn cứ."
+    "vào một ngày hoặc giờ cụ thể, dùng dòng '=> Tại HH:MM' (nếu có), liệt kê tên các mã trong 'CHƯA điểm danh' và nêu giờ của bài làm căn cứ.\n"
+    "LỊCH SỬ KT là báo cáo Cảm nhận Kinh Thánh tuần (mỗi người 7 ô T2..CN); hỏi ai chưa cảm nhận/báo cáo KT vào "
+    "một ngày hoặc giờ cụ thể thì dùng dòng '=> Tại HH:MM' hoặc mốc gần nhất, liệt kê mã và các ngày còn trống."
 )
 
 
@@ -270,6 +331,7 @@ async def answer(question: str) -> str:
             f"<lich_tu_dong>\n{schedule_text()}\n</lich_tu_dong>\n\n"
             f"<nhat_ky_gui_tin>\n{activity_summary()}\n</nhat_ky_gui_tin>\n\n"
             f"<lich_su_mana>\n{mana_history_text(question)}\n</lich_su_mana>\n\n"
+            f"<lich_su_kt>\n{kt_history_text(question)}\n</lich_su_kt>\n\n"
             f"<du_lieu_diem_danh>\n{attendance_summary()}\n</du_lieu_diem_danh>\n\n"
             f"<tai_lieu>\n{docs}\n</tai_lieu>\n\nCâu hỏi: {question}")
     gkey = os.getenv("GEMINI_API_KEY", "")

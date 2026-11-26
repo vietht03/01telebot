@@ -536,10 +536,13 @@ def kt_header(text: str):
     return (first, second) if first and second else None
 
 
-def ingest_kt(text: str) -> dt.date:
+def ingest_kt(text: str, src: str = None, at: dt.datetime = None, ref: dt.date = None) -> dt.date:
     """Gộp bài KT vào dữ liệu của tuần: mỗi ô giữ icon thật; ô trống ở bản mới không xóa icon đã có."""
-    start = header_start(text) or week_monday()
+    ref = ref or dt.datetime.now(TZ).date()
+    start = header_start(text) or ref - dt.timedelta(days=ref.weekday())
     wk = start.isoformat()
+    now = dt.datetime.now(TZ)
+    rag.record_kt_post(src or f"paste:{now.isoformat()}", wk, at or now, parse_report_raw(text))  # lịch sử theo giờ cho RAG
     for code, raw in parse_report_raw(text):
         old = db.execute("SELECT slots FROM kt_marks WHERE week=? AND code=?", (wk, code)).fetchone()
         oldl = old[0].split("/") if old else [""] * 7

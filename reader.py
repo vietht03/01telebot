@@ -319,7 +319,8 @@ def handle(msg):
             log.info("Ghi nhận bài Mana ngày %s", bot.ingest_mana(
                 text, msg.date.astimezone(bot.TZ).date(), src=f"tg:{msg.id}", at=msg.edit_date or msg.date))
         elif bot.is_kt(text):
-            log.info("Ghi nhận bài KT tuần %s", bot.ingest_kt(text))
+            log.info("Ghi nhận bài KT tuần %s", bot.ingest_kt(
+                text, src=f"tg:{msg.id}", at=msg.edit_date or msg.date, ref=msg.date.astimezone(bot.TZ).date()))
     except Exception:
         log.exception("Lỗi khi xử lý tin")
 
@@ -363,7 +364,7 @@ async def main():
     for m in reversed(old):
         if m.date >= monday:
             handle(m)
-        elif m.text and bot.is_mana(m.text):  # tuần cũ: chỉ nạp Mana để RAG trả lời được lịch sử
+        elif m.text and (bot.is_mana(m.text) or bot.is_kt(m.text)):  # tuần cũ: chỉ nạp Mana / KT để RAG trả lời được lịch sử
             handle(m)
     log.info("Đã quét %d tin (%d ngày gần nhất)", len(old), HISTORY_DAYS)
 
