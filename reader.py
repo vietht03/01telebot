@@ -39,9 +39,11 @@ RELAY_MAX_AGE = 3600  # tin quá 1 giờ thì bỏ, không gửi trễ
 bot.db.execute("CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, created REAL, status TEXT DEFAULT 'new')")
 
 
-async def notify_admin(text: str):
+async def notify_admin(text: str, log_it: bool = True):
     import httpx
     try:
+        if log_it:
+            bot.rag.log_event("gửi bạn", text)
         async with httpx.AsyncClient(timeout=20) as h:
             await h.post(f"https://api.telegram.org/bot{bot.TOKEN}/sendMessage",
                          data={"chat_id": bot.ADMIN_ID, "text": text})
@@ -66,7 +68,8 @@ async def outbox_loop():
                 bot.db.execute("UPDATE outbox SET status='sent' WHERE id=?", (oid,)); bot.db.commit()
                 first = text.strip().splitlines()[0][:60]
                 log.info("Đã gửi cho %s: %s", RELAY_TARGET, first)
-                await notify_admin(f"✅ Đã gửi cho chị ({RELAY_TARGET}): {first}")
+                bot.rag.log_event("chuyển cho chị", text)
+                await notify_admin(f"✅ Đã gửi cho chị ({RELAY_TARGET}): {first}", log_it=False)
                 await asyncio.sleep(2)
         except Exception:
             log.exception("Lỗi khi chuyển tin")
@@ -292,6 +295,8 @@ async def review_loop(group):
                 done = bot.db.execute("SELECT val FROM seen WHERE key=?", (key,)).fetchone()
                 if due <= now < due + dt.timedelta(seconds=REVIEW_GRACE) and not (done and done[0] == now.date().isoformat()):
                     bot.db.execute("INSERT OR REPLACE INTO seen VALUES(?,?)", (key, now.date().isoformat())); bot.db.commit()
+                    if bot.rag.paused():  # /tat: bỏ qua lượt này
+                        continue
                     if rv.get("post"):
                         await run_post(group, rv, relay_out=True)
                     else:
@@ -336,6 +341,14 @@ async def main():
         log.error("Không tìm thấy nhóm (TG_GROUP_ID=%s)", GROUP_ID)
         sys.exit(1)
     log.info("Đang đọc nhóm: %s", getattr(group, "title", group.id))
+    wd = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
+    lines = []
+    for rv in REVIEWS:
+        days = "hằng ngày" if len(rv.get("days") or ()) == 7 else wd[rv["wd"]] if "wd" in rv else "các ngày " + ",".join(wd[d] for d in rv["days"])
+        what = ("bảng " + ", ".join(lb for _, lb in rv["tables"])) if rv.get("tables") else ("bài " + POSTS[rv["post"]][1])
+        how = "chỉ nhắc người chưa điểm danh" if rv.get("nhac") else "forward bảng gốc cho bạn rồi chuyển chị + nhắc người chưa điểm danh"
+        lines.append(f"- {days} {rv['at']:%H:%M}: rà soát {what} ({how})")
+    bot.rag.set_schedule("schedule_reader", "\n".join(lines))
 
     # đọc lại lịch sử từ đầu tuần để bù những bài đã đăng trước khi chương trình chạy
     monday = dt.datetime.combine(bot.week_monday(), dt.time(0, 0), tzinfo=bot.TZ)

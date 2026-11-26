@@ -44,7 +44,9 @@ async def send_admin(bot, text: str):
     from telegram.error import NetworkError, TimedOut
     for i in range(5):
         try:
-            return await bot.send_message(ADMIN_ID, text)
+            m = await bot.send_message(ADMIN_ID, text)
+            rag.log_event("gửi bạn", text)
+            return m
         except (TimedOut, NetworkError):
             logging.warning("Gửi tin cho admin lỗi mạng, thử lại lần %d", i + 1)
             await asyncio.sleep(5 * (i + 1))
@@ -58,7 +60,7 @@ def relay_on() -> bool:
 
 def relay(text: str):
     """Xếp tin vào hàng đợi để tài khoản Telegram của bạn (chương trình reader) gửi tiếp cho người nhận."""
-    if relay_on():
+    if relay_on() and not rag.paused():
         import time
         db.execute("INSERT INTO outbox(text, created) VALUES(?,?)", (text, time.time()))
         db.commit()
@@ -117,6 +119,24 @@ async def tudong(update: Update, ctx):
 
 
 @admin_only
+async def tat(update: Update, ctx):
+    db.execute("INSERT OR REPLACE INTO seen VALUES('paused','on')")
+    db.commit()
+    rag.log_event("hệ thống", "Admin gõ /tat: tạm dừng mọi tin tự động")
+    await update.message.reply_text("⏸ Đã tạm dừng mọi tin tự động (nhắc, form, báo cáo, chuyển cho chị). "
+                                    "Các lệnh gõ tay vẫn dùng được. Gõ /bat để bật lại.")
+
+
+@admin_only
+async def bat(update: Update, ctx):
+    was = rag.paused()
+    db.execute("INSERT OR REPLACE INTO seen VALUES('paused','off')")
+    db.commit()
+    rag.log_event("hệ thống", "Admin gõ /bat: bật lại tin tự động")
+    await update.message.reply_text("▶️ Đã bật lại tin tự động." if was else "Bot vẫn đang bật bình thường.")
+
+
+@admin_only
 async def chuyen(update: Update, ctx):
     arg = ctx.args[0].lower() if ctx.args else ""
     if arg in ("on", "off"):
@@ -140,7 +160,8 @@ async def start(update: Update, ctx):
         "/mau <nội dung> - đặt mẫu tin điểm danh ({date} = ngày)\n"
         "/dd - dán danh sách người đã điểm danh để đối chiếu\n"
         "/test - nhắc điểm danh thử ngay\n"
-        "/hoi <câu hỏi> - hỏi RAG (hoặc nhắn thẳng)\n"
+        "/hoi <câu hỏi> - hỏi RAG (hoặc nhắn thẳng), vd: hôm nay bot gửi báo cáo lúc mấy giờ?\n"
+        "/tat - tạm dừng mọi tin tự động, /bat - bật lại\n"
         "Gửi file PDF/txt/md để nạp nội quy.")
 
 
@@ -726,6 +747,8 @@ async def on_document(update: Update, ctx):
 
 
 async def setup_profile(app):
+    rag.log_event("hệ thống", "Bot khởi động" + (" (đang ở chế độ tạm dừng)" if rag.paused() else ""))
+    rag.set_schedule("schedule_bot", bot_schedule())
     from telegram import BotCommand, InputProfilePhotoStatic
     await app.bot.set_my_commands([
         BotCommand("dd", "Đối chiếu danh sách điểm danh"),
@@ -743,6 +766,8 @@ async def setup_profile(app):
         BotCommand("giaoduc", "Form điểm danh giáo dục Chủ nhật"),
         BotCommand("dangle", "Form dâng lễ Chủ nhật"),
         BotCommand("kt", "Khung + báo cáo Cảm nhận KT"),
+        BotCommand("tat", "Tạm dừng mọi tin tự động"),
+        BotCommand("bat", "Bật lại tin tự động"),
         BotCommand("chuyen", "Bật/tắt tự gửi báo cáo cho chị"),
         BotCommand("tudong", "Bật/tắt tự động trả lời đang bận"),
         BotCommand("start", "Xem hướng dẫn"),
@@ -759,8 +784,22 @@ async def setup_profile(app):
 JOB_GRACE = int(os.getenv("JOB_GRACE_S", "5400"))  # điện thoại ngủ làm bot dậy trễ: vẫn chạy bù nếu trễ không quá 90 phút
 
 
+def bot_schedule() -> str:
+    return "\n".join([
+        f"- Hằng ngày {MANA_TIME[:5]} (báo trước 5 phút): bảng kết quả Mana + dòng ai chưa điểm danh (gửi bạn, rồi chuyển chị)",
+        f"- Hằng ngày {KT_TIME[:5]} (báo trước 5 phút): khung Cảm nhận KT + dòng ai chưa cảm nhận (gửi bạn, rồi chuyển chị)",
+        f"- Thứ 3 {THU3_TIME[:5]}: form sách Sáng tạo Trời Đất; Thứ 4 {THU4_TIME[:5]}: form dâng lễ; "
+        f"Thứ 5 {THU5_TIME[:5]}: form Jondo Dan; Thứ 7 {THU7_TIME[:5]}: form lễ nhóm",
+        f"- Chủ nhật {CN_GD_TIME[:5]}: form giáo dục; {CN_DL_TIME[:5]}: form dâng lễ"])
+
+
 def daily(app, cb, when, **kw):
-    app.job_queue.run_daily(cb, when, job_kwargs={"misfire_grace_time": JOB_GRACE, "coalesce": True}, **kw)
+    async def guarded(ctx):
+        if rag.paused():  # /tat: bỏ qua mọi tin tự động
+            return
+        return await cb(ctx)
+    guarded.__name__ = cb.__name__
+    app.job_queue.run_daily(guarded, when, job_kwargs={"misfire_grace_time": JOB_GRACE, "coalesce": True}, **kw)
 
 
 async def on_error(update, ctx):
@@ -770,7 +809,7 @@ async def on_error(update, ctx):
 def main():
     app = Application.builder().token(TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).pool_timeout(30).concurrent_updates(True).post_init(setup_profile).build()
     for name, fn in [("myid", myid), ("start", start), ("lop", lop), ("danhsach", danhsach),
-                     ("mau", mau), ("test", test), ("tudong", tudong), ("thu4", thu4), ("rasoat", rasoat), ("thanhvien", thanhvien), ("thu5", thu5), ("thu7", make_form_cmd("msg_thu7.txt")), ("thu3", make_form_cmd("msg_thu3.txt")), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
+                     ("mau", mau), ("test", test), ("tudong", tudong), ("tat", tat), ("bat", bat), ("thu4", thu4), ("rasoat", rasoat), ("thanhvien", thanhvien), ("thu5", thu5), ("thu7", make_form_cmd("msg_thu7.txt")), ("thu3", make_form_cmd("msg_thu3.txt")), ("giaoduc", make_form_cmd("msg_cn_giaoduc.txt")), ("dangle", make_form_cmd("msg_cn_dangle.txt")), ("kt", kt_cmd), ("chuyen", chuyen), ("dd", dd), ("hoi", ask)]:
         app.add_handler(CommandHandler(name, fn))
     P = filters.ChatType.PRIVATE
     app.add_handler(ChatMemberHandler(on_added, ChatMemberHandler.MY_CHAT_MEMBER))

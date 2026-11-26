@@ -5,7 +5,10 @@ import datetime as dt
 from pathlib import Path
 
 import os
+from zoneinfo import ZoneInfo
 from pypdf import PdfReader
+
+TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh"))
 
 MODEL = "claude-opus-5-5"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -19,7 +22,51 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
     source, text, tokenize='unicode61 remove_diacritics 2');
 """)
 
+db.executescript("""
+CREATE TABLE IF NOT EXISTS seen(key TEXT PRIMARY KEY, val TEXT);
+CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, kind TEXT, text TEXT);
+""")
+
 CHUNK, OVERLAP = 900, 150
+
+
+# ---------- nhật ký hoạt động: mọi tin bot đã gửi, để trả lời "hôm nay bot có gửi ... lúc mấy giờ" ----------
+def log_event(kind: str, text: str):
+    first = re.sub(r"\s+", " ", text).strip()[:220]
+    db.execute("INSERT INTO activity(at, kind, text) VALUES(?,?,?)",
+               (dt.datetime.now(TZ).isoformat(timespec="seconds"), kind, first))
+    db.commit()
+
+
+def paused() -> bool:
+    row = db.execute("SELECT val FROM seen WHERE key='paused'").fetchone()
+    return bool(row and row[0] == "on")
+
+
+def set_schedule(key: str, text: str):
+    db.execute("INSERT OR REPLACE INTO seen VALUES(?,?)", (key, text))
+    db.commit()
+
+
+def schedule_text() -> str:
+    rows = db.execute("SELECT val FROM seen WHERE key IN ('schedule_bot','schedule_reader') ORDER BY key").fetchall()
+    return "\n".join(r[0] for r in rows) or "(chưa có lịch)"
+
+
+_WD = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
+
+
+def activity_summary(days: int = 14, limit: int = 250) -> str:
+    since = (dt.datetime.now(TZ) - dt.timedelta(days=days)).isoformat()
+    rows = db.execute("SELECT at, kind, text FROM activity WHERE at>=? ORDER BY id DESC LIMIT ?",
+                      (since, limit)).fetchall()[::-1]
+    if not rows:
+        return "(nhật ký trống)"
+    out = []
+    for at, kind, text in rows:
+        t = dt.datetime.fromisoformat(at)
+        out.append(f"{t:%Y-%m-%d} ({_WD[t.weekday()]}) {t:%H:%M} [{kind}] {text}")
+    return "\n".join(out)
 
 
 def _split(text: str):
@@ -81,7 +128,12 @@ def attendance_summary(days: int = 30) -> str:
 SYSTEM = (
     "Bạn là trợ lý điểm danh của một nhóm Telegram. Trả lời bằng tiếng Việt, ngắn gọn, "
     "chỉ dựa trên DỮ LIỆU ĐIỂM DANH và TÀI LIỆU được cung cấp. Nếu thông tin không có, "
-    "hãy nói rõ là không có, đừng bịa. Khi trích nội quy, nêu tên file nguồn."
+    "hãy nói rõ là không có, đừng bịa. Khi trích nội quy, nêu tên file nguồn.\n"
+    "NHẬT KÝ GỬI TIN liệt kê mọi tin bot đã gửi (kind: 'gửi bạn' = bot nhắn cho admin, 'chuyển cho chị' = tin "
+    "đã chuyển cho chị, 'hệ thống' = khởi động / tạm dừng / bật lại). Khi được hỏi hôm nay/hôm qua bot có gửi "
+    "điểm danh hay báo cáo không và lúc mấy giờ, hãy đối chiếu BÂY GIỜ, LỊCH TỰ ĐỘNG và NHẬT KÝ: nêu giờ đã gửi; "
+    "nếu giờ hẹn đã qua mà không có trong nhật ký thì nói rõ là KHÔNG thấy bot gửi và gợi ý nguyên nhân từ nhật ký "
+    "(bot khởi động lại, tạm dừng bằng /tat...); nếu chưa tới giờ hẹn thì nói là chưa tới giờ."
 )
 
 
@@ -138,7 +190,12 @@ async def _ask_claude(user: str) -> str:
 async def answer(question: str) -> str:
     hits = search(question)
     docs = "\n\n".join(f"[{s}] {t}" for s, t in hits) or "(không tìm thấy đoạn tài liệu liên quan)"
-    user = (f"<du_lieu_diem_danh>\n{attendance_summary()}\n</du_lieu_diem_danh>\n\n"
+    now = dt.datetime.now(TZ)
+    user = (f"<bay_gio>{now:%Y-%m-%d %H:%M} ({_WD[now.weekday()]}), múi giờ Việt Nam. "
+            f"Chế độ tạm dừng: {'ĐANG TẮT (/tat)' if paused() else 'bình thường'}</bay_gio>\n\n"
+            f"<lich_tu_dong>\n{schedule_text()}\n</lich_tu_dong>\n\n"
+            f"<nhat_ky_gui_tin>\n{activity_summary()}\n</nhat_ky_gui_tin>\n\n"
+            f"<du_lieu_diem_danh>\n{attendance_summary()}\n</du_lieu_diem_danh>\n\n"
             f"<tai_lieu>\n{docs}\n</tai_lieu>\n\nCâu hỏi: {question}")
     gkey = os.getenv("GEMINI_API_KEY", "")
     if gkey and not gkey.startswith("dán"):
