@@ -121,6 +121,7 @@ REVIEWS = [  # id, thứ (0=T2), giờ rà soát, các bảng; nhac=True: chỉ 
     dict(id="mana", days=bot.MANA_DAYS, at=_hm(bot.MANA_TIME), post="mana"),
     dict(id="kt", days=bot.KT_DAYS, at=_hm(bot.KT_TIME), post="kt"),
 ]
+HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", "35"))  # quét lại bấy nhiêu ngày để dựng lịch sử Mana cho RAG
 REVIEW_GRACE = 30 * 60  # reader khởi động trễ quá 30 phút sau giờ hẹn thì bỏ, không báo muộn
 _RANK = {"missing": 0, "absent": 1, "ok": 2}
 
@@ -315,7 +316,8 @@ def handle(msg):
         return
     try:
         if bot.is_mana(text):
-            log.info("Ghi nhận bài Mana ngày %s", bot.ingest_mana(text, msg.date.astimezone(bot.TZ).date()))
+            log.info("Ghi nhận bài Mana ngày %s", bot.ingest_mana(
+                text, msg.date.astimezone(bot.TZ).date(), src=f"tg:{msg.id}", at=msg.edit_date or msg.date))
         elif bot.is_kt(text):
             log.info("Ghi nhận bài KT tuần %s", bot.ingest_kt(text))
     except Exception:
@@ -353,13 +355,17 @@ async def main():
     # đọc lại lịch sử từ đầu tuần để bù những bài đã đăng trước khi chương trình chạy
     monday = dt.datetime.combine(bot.week_monday(), dt.time(0, 0), tzinfo=bot.TZ)
     old = []
-    async for m in client.iter_messages(group, limit=3000):
-        if m.date < monday:
+    cutoff = dt.datetime.now(bot.TZ) - dt.timedelta(days=HISTORY_DAYS)
+    async for m in client.iter_messages(group, limit=10000):
+        if m.date < cutoff:
             break
         old.append(m)
     for m in reversed(old):
-        handle(m)
-    log.info("Đã quét %d tin từ đầu tuần", len(old))
+        if m.date >= monday:
+            handle(m)
+        elif m.text and bot.is_mana(m.text):  # tuần cũ: chỉ nạp Mana để RAG trả lời được lịch sử
+            handle(m)
+    log.info("Đã quét %d tin (%d ngày gần nhất)", len(old), HISTORY_DAYS)
 
     @client.on(events.NewMessage(chats=group))
     @client.on(events.MessageEdited(chats=group))

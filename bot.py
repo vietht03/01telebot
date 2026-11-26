@@ -322,11 +322,13 @@ def mana_doc(day: dt.date) -> str:
     return "\n".join(lines)
 
 
-def ingest_mana(text: str, day: dt.date = None) -> dt.date:
+def ingest_mana(text: str, day: dt.date = None, src: str = None, at: dt.datetime = None) -> dt.date:
     """Gộp bài Mana vào dữ liệu trong ngày: có icon ở BẤT KỲ bản nào là tính đã điểm danh.
     Ngày = ngày bài được ĐĂNG (không dùng tiêu đề [dd.mm] vì nhóm hay quên đổi tiêu đề)."""
     day = day or dt.datetime.now(TZ).date()
     d = day.isoformat()
+    now = dt.datetime.now(TZ)
+    rag.record_mana_post(src or f"paste:{now.isoformat()}", d, at or now, parse_mana(text))  # lịch sử theo giờ để RAG trả lời
     for code, st, note in parse_mana(text):
         old = db.execute("SELECT status, note FROM mana_marks WHERE day=? AND code=?", (d, code)).fetchone()
         if old is None or RANK[st] > RANK[old[0]] or (st == old[0] and note and note != old[1]):

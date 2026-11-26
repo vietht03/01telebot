@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS seen(key TEXT PRIMARY KEY, val TEXT);
 CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, kind TEXT, text TEXT);
 """)
 
+db.execute("CREATE TABLE IF NOT EXISTS mana_posts(src TEXT PRIMARY KEY, day TEXT, at TEXT, rows TEXT)")
+
 CHUNK, OVERLAP = 900, 150
 
 
@@ -51,6 +53,76 @@ def set_schedule(key: str, text: str):
 def schedule_text() -> str:
     rows = db.execute("SELECT val FROM seen WHERE key IN ('schedule_bot','schedule_reader') ORDER BY key").fetchall()
     return "\n".join(r[0] for r in rows) or "(chưa có lịch)"
+
+
+# ---------- lịch sử Mana theo thời điểm: mỗi bài trong nhóm là 1 mốc, trạng thái = gộp các bài đến mốc đó ----------
+_RANK = {"missing": 0, "absent": 1, "ok": 2}
+
+
+def record_mana_post(src: str, day: str, at: dt.datetime, rows):
+    import json
+    db.execute("INSERT OR REPLACE INTO mana_posts VALUES(?,?,?,?)",
+               (src, day, at.astimezone(TZ).isoformat(timespec="seconds"), json.dumps(rows, ensure_ascii=False)))
+    db.commit()
+
+
+def mana_snapshots(day: str):
+    """[(HH:MM, {mã: (trạng thái, ghi chú)})] sau từng bài trong ngày, theo thứ tự thời gian."""
+    import json
+    state, out = {}, []
+    for at, rows in db.execute("SELECT at, rows FROM mana_posts WHERE day=? ORDER BY at", (day,)).fetchall():
+        for code, st, note in json.loads(rows):
+            old = state.get(code)
+            if old is None or _RANK[st] > _RANK[old[0]] or (st == old[0] and note and note != old[1]):
+                state[code] = (st, note)
+        out.append((dt.datetime.fromisoformat(at).strftime("%H:%M"), dict(state)))
+    return out
+
+
+def _fmt_state(state) -> str:
+    miss = [c for c, (st, _) in state.items() if st == "missing"]
+    absent = [f"{c}" + (f" ({n})" if n else "") for c, (st, n) in state.items() if st == "absent"]
+    ok = sum(1 for st, _ in state.values() if st == "ok")
+    return (f"đã có icon {ok}/{len(state)}; CHƯA điểm danh: {', '.join(miss) or 'không ai'}"
+            + (f"; báo vắng: {', '.join(absent)}" if absent else ""))
+
+
+def _question_days(q: str):
+    today = dt.datetime.now(TZ).date()
+    days = []
+    for d, m in re.findall(r"(\d{1,2})\s*[/.\-]\s*(\d{1,2})(?!\d)", q):
+        try:
+            days.append(dt.date(today.year, int(m), int(d)))
+        except ValueError:
+            pass
+    low = q.lower()
+    if "hôm qua" in low or "hom qua" in low:
+        days.append(today - dt.timedelta(days=1))
+    if "hôm kia" in low or "hom kia" in low:
+        days.append(today - dt.timedelta(days=2))
+    if "hôm nay" in low or "hom nay" in low:
+        days.append(today)
+    return list(dict.fromkeys(days)) or [today - dt.timedelta(days=i) for i in range(3)]
+
+
+def mana_history_text(q: str) -> str:
+    """Lịch sử Mana của các ngày được hỏi, kèm trạng thái chính xác tại giờ được hỏi (vd 17h30)."""
+    tm = re.search(r"(\d{1,2})\s*(?:h|g|:)\s*(\d{2})?", q.lower())
+    ask_at = f"{int(tm.group(1)):02d}:{int(tm.group(2) or 0):02d}" if tm and int(tm.group(1)) < 24 else None
+    out = []
+    for day in _question_days(q):
+        d = day.isoformat()
+        snaps = mana_snapshots(d)
+        if not snaps:
+            out.append(f"Mana {day:%d/%m/%Y}: không có bài nào được ghi nhận.")
+            continue
+        out.append(f"Mana {day:%d/%m/%Y} — các mốc theo bài đăng trong nhóm:")
+        out += [f"  {t}: {_fmt_state(st)}" for t, st in snaps]
+        if ask_at:
+            before = [x for x in snaps if x[0] <= ask_at]
+            out.append(f"  => Tại {ask_at}: " + (f"{_fmt_state(before[-1][1])} (theo bài mới nhất lúc {before[-1][0]})"
+                       if before else f"chưa có bài nào trong nhóm (bài đầu tiên lúc {snaps[0][0]})"))
+    return "\n".join(out)
 
 
 _WD = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
@@ -133,7 +205,9 @@ SYSTEM = (
     "đã chuyển cho chị, 'hệ thống' = khởi động / tạm dừng / bật lại). Khi được hỏi hôm nay/hôm qua bot có gửi "
     "điểm danh hay báo cáo không và lúc mấy giờ, hãy đối chiếu BÂY GIỜ, LỊCH TỰ ĐỘNG và NHẬT KÝ: nêu giờ đã gửi; "
     "nếu giờ hẹn đã qua mà không có trong nhật ký thì nói rõ là KHÔNG thấy bot gửi và gợi ý nguyên nhân từ nhật ký "
-    "(bot khởi động lại, tạm dừng bằng /tat...); nếu chưa tới giờ hẹn thì nói là chưa tới giờ."
+    "(bot khởi động lại, tạm dừng bằng /tat...); nếu chưa tới giờ hẹn thì nói là chưa tới giờ.\n"
+    "LỊCH SỬ MANA cho biết trạng thái từng ngày theo từng bài đăng trong nhóm. Khi hỏi ai chưa điểm danh/báo cáo Mana "
+    "vào một ngày hoặc giờ cụ thể, dùng dòng '=> Tại HH:MM' (nếu có), liệt kê tên các mã trong 'CHƯA điểm danh' và nêu giờ của bài làm căn cứ."
 )
 
 
@@ -195,6 +269,7 @@ async def answer(question: str) -> str:
             f"Chế độ tạm dừng: {'ĐANG TẮT (/tat)' if paused() else 'bình thường'}</bay_gio>\n\n"
             f"<lich_tu_dong>\n{schedule_text()}\n</lich_tu_dong>\n\n"
             f"<nhat_ky_gui_tin>\n{activity_summary()}\n</nhat_ky_gui_tin>\n\n"
+            f"<lich_su_mana>\n{mana_history_text(question)}\n</lich_su_mana>\n\n"
             f"<du_lieu_diem_danh>\n{attendance_summary()}\n</du_lieu_diem_danh>\n\n"
             f"<tai_lieu>\n{docs}\n</tai_lieu>\n\nCâu hỏi: {question}")
     gkey = os.getenv("GEMINI_API_KEY", "")
